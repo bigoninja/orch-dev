@@ -22,6 +22,11 @@ def _log(result: CheckResult) -> str:
     return result.output_path.read_bytes().decode("utf-8", errors="replace")
 
 
+def _stdout(result: CheckResult) -> str:
+    """The command's own stdout only — never the header, which echoes cmd/cwd."""
+    return _log(result).split("STDOUT\n", 1)[1].split("\nSTDERR\n", 1)[0]
+
+
 def test_pass_and_fail_exit_codes(tmp_path):
     results = _run({"pass": Check(cmd="true"), "fail": Check(cmd="exit 3")}, tmp_path)
     by_name = {r.name: r for r in results}
@@ -36,7 +41,7 @@ def test_cwd_honored(tmp_path):
     (r,) = _run({"pwd": Check(cmd="pwd", cwd="sub")}, tmp_path)
     assert r.exit_code == 0
     assert r.cwd == "sub"
-    assert "sub" in _log(r)
+    assert _stdout(r).strip().endswith("sub")
     assert r.output_path.name == "T1.check.pwd.log"
     assert r.output_path.parent == tmp_path / "evidence"
 
@@ -44,13 +49,13 @@ def test_cwd_honored(tmp_path):
 def test_cwd_defaults_to_worktree_root(tmp_path):
     (r,) = _run({"pwd": Check(cmd="pwd")}, tmp_path)
     assert r.cwd is None
-    assert str(tmp_path / "wt") in _log(r)
+    assert _stdout(r).strip() == str(tmp_path / "wt")
 
 
 def test_env_var_visible_to_command(tmp_path):
-    (r,) = _run({"env": Check(cmd="echo $MYVAR")}, tmp_path, env={"MYVAR": "x"})
+    (r,) = _run({"env": Check(cmd="echo $MYVAR-$MYVAR")}, tmp_path, env={"MYVAR": "seen-by-child"})
     assert r.exit_code == 0
-    assert "x" in _log(r)
+    assert _stdout(r).strip() == "seen-by-child-seen-by-child"
 
 
 def test_timeout_marks_minus_nine_and_kills_fast(tmp_path):
