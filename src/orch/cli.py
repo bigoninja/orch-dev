@@ -438,6 +438,46 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_models_list(args: argparse.Namespace) -> int:
+    from orch.errors import ConfigError
+    from orch.models import describe_models
+
+    try:
+        rows = describe_models(Path(args.config))
+    except ConfigError as e:
+        print(f"error: {e}")
+        return 1
+    for role, model, pinned in rows:
+        print(f"{role:<10} {model}" + ("" if pinned else "   (run default)"))
+    return 0
+
+
+def cmd_models_set(args: argparse.Namespace) -> int:
+    from orch.errors import ConfigError
+    from orch.models import set_role_model
+
+    try:
+        set_role_model(Path(args.config), args.role, args.model)
+    except ConfigError as e:
+        print(f"error: {e}")
+        return 1
+    print(f"{args.role} -> {args.model}   ({args.config})")
+    return 0
+
+
+def cmd_models_unset(args: argparse.Namespace) -> int:
+    from orch.errors import ConfigError
+    from orch.models import unset_role_model
+
+    try:
+        unset_role_model(Path(args.config), args.role)
+    except ConfigError as e:
+        print(f"error: {e}")
+        return 1
+    print(f"{args.role} unset — it now runs the config's default model   ({args.config})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="orch")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -485,6 +525,20 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--run", default=None, help="run id (defaults to the latest run)")
     db.add_argument("--config", default="orch.config.yaml", help="path to the config")
     db.set_defaults(fn=cmd_dashboard)
+    m = sub.add_parser("models", help="list or assign the model each role runs")
+    msub = m.add_subparsers(dest="models_cmd", required=True)
+    ml = msub.add_parser("list", help="show every role's effective model")
+    ml.add_argument("--config", default="orch.config.yaml", help="path to the config")
+    ml.set_defaults(fn=cmd_models_list)
+    ms = msub.add_parser("set", help="pin a role to a model")
+    ms.add_argument("role", help="one of: planner, implement, review, fix, repair")
+    ms.add_argument("model", help="the model id to pin, e.g. opencode/space-bunny-free")
+    ms.add_argument("--config", default="orch.config.yaml", help="path to the config")
+    ms.set_defaults(fn=cmd_models_set)
+    mu = msub.add_parser("unset", help="drop a role's pin so it uses the run default")
+    mu.add_argument("role", help="one of: planner, implement, review, fix, repair")
+    mu.add_argument("--config", default="orch.config.yaml", help="path to the config")
+    mu.set_defaults(fn=cmd_models_unset)
     return p
 
 

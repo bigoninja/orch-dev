@@ -11,6 +11,9 @@ dependencies = [
     "langgraph-checkpoint-sqlite",
     "pydantic>=2",
     "pyyaml",
+    # Comment-preserving YAML round-trip: `orch models` edits a config in place,
+    # and `yaml.safe_dump` would delete the rationale comments those files carry.
+    "ruamel.yaml>=0.18",
 ]
 
 [dependency-groups]
