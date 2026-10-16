@@ -133,7 +133,7 @@ def test_http_serves_page_payload_and_404(tmp_path: Path):
         with urllib.request.urlopen(base + "/") as resp:
             page = resp.read().decode("utf-8")
             assert resp.status == 200
-            assert "orch dashboard" in page and "/api/state" in page
+            assert "<title>orch dashboard</title>" in page and "/api/state" in page
             assert 'id="board"' in page
             assert "Ready to merge" in page and "Needs you" in page
             assert 'id="view-status"' in page and 'id="view-cards"' in page

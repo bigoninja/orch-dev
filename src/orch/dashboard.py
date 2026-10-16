@@ -84,7 +84,7 @@ _PAGE = """<!doctype html>
 </head>
 <body>
 <header>
-  <h1><span class="logo" aria-hidden="true"><!--LOGO--></span><span>orch dashboard <span id="runid" class="sub"></span></span></h1>
+  <h1><span class="logo" aria-hidden="true"><!--LOGO--></span><span id="runid" class="sub"></span></h1>
   <div class="bar">
     <span id="state" class="pill">…</span>
     <span id="integ" class="sub"></span>
