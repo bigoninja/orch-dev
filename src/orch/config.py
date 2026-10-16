@@ -4,6 +4,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from orch.errors import ConfigError
+from orch.gitops import is_git_repo
 
 DEFAULT_RISKY_PATTERNS = [
     "db/migrations/**", "**/auth/**", "**/payments/**", "**/gateway/**",
@@ -31,10 +32,6 @@ class Config(BaseModel):
     runs_dir: str = "runs"
 
 
-def _is_git_repo(path: Path) -> bool:  # Task 4 swaps this for orch.gitops.is_git_repo
-    return (path / ".git").exists()
-
-
 def load_config(path: Path) -> Config:
     try:
         raw = yaml.safe_load(path.read_text()) or {}
@@ -44,7 +41,7 @@ def load_config(path: Path) -> Config:
 
 
 def init_config(target_repo: Path, out: Path) -> Config:
-    if not target_repo.is_dir() or not _is_git_repo(target_repo):
+    if not target_repo.is_dir() or not is_git_repo(target_repo):
         raise ConfigError(f"target_repo is not a git repository: {target_repo}")
     cfg = Config(target_repo=target_repo.resolve())
     out.write_text(TEMPLATE_NOTE + yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False))
