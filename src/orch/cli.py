@@ -424,6 +424,20 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    cfg, rc = _config_or_error(args.config)
+    if cfg is None:
+        return rc
+    run_dir = _run_dir(cfg, args.run, awaiting=False)
+    if run_dir is None:
+        return 1
+
+    from orch.dashboard import serve
+
+    serve(run_dir, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="orch")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -466,6 +480,11 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--run", default=None, help="run id (defaults to the latest run)")
     st.add_argument("--config", default="orch.config.yaml", help="path to the config")
     st.set_defaults(fn=cmd_status)
+    db = sub.add_parser("dashboard", help="serve a local auto-refreshing progress page")
+    db.add_argument("--port", type=int, default=8765, help="port to bind on 127.0.0.1")
+    db.add_argument("--run", default=None, help="run id (defaults to the latest run)")
+    db.add_argument("--config", default="orch.config.yaml", help="path to the config")
+    db.set_defaults(fn=cmd_dashboard)
     return p
 
 

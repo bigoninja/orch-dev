@@ -80,4 +80,5 @@ def snapshot_run(
         tasks=view.get("tasks") or {},
         task_state=view.get("task_state") or {},
         escalation=view.get("escalation"),
+        summary=view.get("summary"),
     )

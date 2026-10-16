@@ -196,11 +196,13 @@ def snapshot_state(
     tasks: dict[str, dict],
     task_state: dict[str, dict],
     escalation: dict | None,
+    summary: str | None = None,
 ) -> None:
     """Persist the live state: atomic ``state.json`` plus a regenerated ``status.md``.
 
     Called by every pipeline node (pre-flight ruling R3), so the on-disk
-    snapshot always matches the checkpointed graph state.
+    snapshot always matches the checkpointed graph state. ``summary`` is written
+    when present so a finished run is detectable from ``state.json`` alone.
     """
     payload = {
         "run_id": run_id,
@@ -212,6 +214,7 @@ def snapshot_state(
             for task_id, state in task_state.items()
         },
         "escalation": escalation,
+        "summary": summary,
     }
     atomic_write(run_dir.state_path, json.dumps(payload, indent=2, default=_json_default) + "\n")
     write_status(

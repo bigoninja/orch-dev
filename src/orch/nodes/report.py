@@ -30,5 +30,7 @@ def report(state: dict, *, cfg: Config, run_dir: RunDir) -> dict:
     if escalation is not None:
         summary += f" — escalated: {escalation.get('kind')}"
 
-    snapshot_run(run_dir, cfg, state)
+    # Fold the summary into the final snapshot so `state.json` marks the run over
+    # (the CLI's latest-run selection and the dashboard both read it).
+    snapshot_run(run_dir, cfg, {**state, "summary": summary})
     return {"summary": summary}
