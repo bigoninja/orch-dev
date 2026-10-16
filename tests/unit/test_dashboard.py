@@ -138,6 +138,7 @@ def test_http_serves_page_payload_and_404(tmp_path: Path):
             assert "Ready to merge" in page and "Needs you" in page
             assert 'id="view-status"' in page and 'id="view-cards"' in page
             assert 'class="nav"' in page and 'id="brief"' not in page
+            assert 'class="logo"' in page and "F69800" in page
 
         with urllib.request.urlopen(base + "/api/state") as resp:
             data = json.loads(resp.read().decode("utf-8"))

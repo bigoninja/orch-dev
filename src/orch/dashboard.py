@@ -20,6 +20,8 @@ from orch.artifacts import RunDir
 
 _TERMINAL_OK = {"integrated"}
 
+_LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 295 90"><g fill="#ffffff" transform="matrix(5.2863438788431925,0,0,5.2863438788431925,122.97796302478926,0.19823858340447487)"><path d="M4.24 14.15Q2.83 14.15 1.89 13.27Q0.95 12.38 0.95 10.49L0.95 10.49Q0.95 9.21 1.41 8.39Q1.86 7.57 2.60 7.20Q3.35 6.83 4.24 6.83L4.24 6.83Q5.14 6.83 5.87 7.20Q6.61 7.57 7.06 8.39Q7.52 9.21 7.52 10.49L7.52 10.49Q7.52 11.77 7.06 12.59Q6.61 13.41 5.87 13.78Q5.14 14.15 4.24 14.15L4.24 14.15ZM4.24 12.81Q4.90 12.81 5.38 12.27Q5.87 11.73 5.87 10.49L5.87 10.49Q5.87 9.25 5.38 8.71Q4.90 8.18 4.24 8.18L4.24 8.18Q3.57 8.18 3.09 8.71Q2.60 9.24 2.60 10.49L2.60 10.49Q2.60 11.73 3.09 12.27Q3.57 12.81 4.24 12.81L4.24 12.81ZM14.97 8.22Q14.29 8.22 13.82 8.53Q13.34 8.83 13.13 9.23L13.13 9.23L13.13 12.67L15.34 12.67L15.34 14L9.84 14L9.84 12.67L11.55 12.67L11.55 8.33L9.84 8.33L9.84 7L12.71 7L12.98 7.85Q13.36 7.36 13.93 7.10Q14.50 6.83 15.25 6.83L15.25 6.83Q15.92 6.83 16.45 7.10L16.45 7.10L15.99 8.44Q15.92 8.37 15.64 8.29Q15.37 8.22 14.97 8.22L14.97 8.22ZM24.32 12.57Q23.39 14.15 21.52 14.15L21.52 14.15Q20.03 14.15 19.09 13.27Q18.14 12.38 18.14 10.49L18.14 10.49Q18.14 8.58 19.08 7.71Q20.02 6.83 21.52 6.83L21.52 6.83Q22.43 6.83 23.14 7.22Q23.84 7.62 24.32 8.51L24.32 8.51L22.89 9.28Q22.44 8.18 21.48 8.18L21.48 8.18Q20.71 8.18 20.24 8.72Q19.78 9.27 19.78 10.49L19.78 10.49Q19.78 11.69 20.24 12.25Q20.71 12.81 21.48 12.81L21.48 12.81Q22.39 12.81 22.89 11.83L22.89 11.83L24.32 12.57ZM29.97 6.85Q31.23 6.85 31.84 7.57Q32.45 8.30 32.45 9.97L32.45 9.97L32.45 14L30.88 14L30.88 10.56Q30.88 9.69 30.79 9.20Q30.70 8.71 30.42 8.45Q30.14 8.19 29.58 8.19L29.58 8.19Q28.90 8.19 28.43 8.55Q27.96 8.90 27.73 9.34L27.73 9.34L27.73 14L26.17 14L26.17 2.80L27.73 2.80L27.73 7.67Q28.13 7.28 28.70 7.06Q29.27 6.85 29.97 6.85L29.97 6.85Z"></path></g><g transform="matrix(1.1111111111111112,0,0,1.1111111111111112,-1.1999982992808071,-6.666666666666671)" stroke="none" fill="#F69800"><path d="M9.9 87H99V14.1H50.4v8.1h40.5v56.699H18V54.601H9.9z"></path><path d="M34.2 14.1h-8.1V6H9.9v24.3H1.8v16.2H18V22.2h16.2v16.2h-8.1v16.201h16.2V14.1z"></path></g></svg>"""
+
 _PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -31,7 +33,8 @@ _PAGE = """<!doctype html>
   body { margin: 0; background: #0d1117; color: #e6edf3;
          font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   header { padding: 20px 24px 12px; border-bottom: 1px solid #21262d; }
-  h1 { margin: 0 0 4px; font-size: 18px; }
+  h1 { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; font-size: 18px; }
+  .logo svg { height: 30px; width: auto; display: block; }
   .sub { color: #8b949e; font-size: 13px; }
   .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
   .pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
@@ -81,7 +84,7 @@ _PAGE = """<!doctype html>
 </head>
 <body>
 <header>
-  <h1>orch dashboard <span id="runid" class="sub"></span></h1>
+  <h1><span class="logo" aria-hidden="true"><!--LOGO--></span><span>orch dashboard <span id="runid" class="sub"></span></span></h1>
   <div class="bar">
     <span id="state" class="pill">…</span>
     <span id="integ" class="sub"></span>
@@ -245,6 +248,8 @@ setInterval(tick, 3000);
 </body>
 </html>
 """
+
+_PAGE = _PAGE.replace("<!--LOGO-->", _LOGO)
 
 
 def build_dashboard_state(run_dir: RunDir) -> dict:
