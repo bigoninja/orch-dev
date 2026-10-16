@@ -37,6 +37,15 @@ def _shim_bin(tmp_path: Path, mode: str) -> str:
         "    print(json.dumps({'type':'text','timestamp':1,'sessionID':'ses_shim',"
         "'part':{'type':'text','text':'HTTP 401 handling'}}))\n"
         "    sys.exit(0)\n"
+        "if mode == 'stdout-error-event':\n"
+        "    print(json.dumps({'type':'error','timestamp':1,'sessionID':'ses_shim',"
+        "'error':{'type':'provider.no-route','message':'Model unavailable: opencode/definitely-not-a-real-model'}}))\n"
+        "    sys.exit(1)\n"
+        "if mode == 'stdout-transcript-unauthorized':\n"
+        "    print(json.dumps({'type':'text','timestamp':1,'sessionID':'ses_shim',"
+        "'part':{'type':'text','text':\"leaked 'unauthorized' and 'Invalid API key.' from authz.ts\"}}))\n"
+        "    print(json.dumps({'type':'tool','timestamp':2,'sessionID':'ses_shim',"
+        "'part':{'type':'tool','state':{'status':'completed','output':\"status === 401 ? 'unauthorized' : 'forbidden'\"}}}))\n"
         "print(json.dumps({'type':'text','timestamp':1,'sessionID':'ses_shim','part':{'type':'text','text':'ok'}}))\n"
     )
     shim.chmod(0o755)
@@ -101,6 +110,22 @@ def test_stderr_unauthorized_is_a_model_error(tmp_path, monkeypatch):
     # The same word signature on stderr is the provider/auth failure it looks like.
     with pytest.raises(ModelUnavailableError):
         _run_with_shim(tmp_path, monkeypatch, "stderr-unauthorized")
+
+
+def test_stdout_error_event_is_a_model_error(tmp_path, monkeypatch):
+    # The probed shape of a genuinely unavailable model: one error event on
+    # stdout ("provider.no-route" / "Model unavailable: …"), empty stderr, exit 1.
+    with pytest.raises(ModelUnavailableError, match="Model unavailable"):
+        _run_with_shim(tmp_path, monkeypatch, "stdout-error-event")
+
+
+def test_stdout_transcript_unauthorized_is_not_a_model_error(tmp_path, monkeypatch):
+    # authz.ts quotes 'unauthorized' and 'Invalid API key.'; a worker that reads
+    # or edits it must not fail the run — transcript text and tool output are
+    # never scanned for the word signatures (pilot finding 2026-10-16).
+    r, _, _ = _run_with_shim(tmp_path, monkeypatch, "stdout-transcript-unauthorized")
+    assert r.exit_code == 0
+    assert "unauthorized" in r.text
 
 
 def test_timeout_kills_process_group(tmp_path, monkeypatch):

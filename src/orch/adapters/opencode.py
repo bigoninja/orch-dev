@@ -14,13 +14,17 @@ the process exits 0 on success.
 directory, so a stale inherited ``PWD`` would leak a worktree run into the
 orchestrator's launch directory.
 
-Failure policy (mirrors the no-substitution law): a provider/auth signature on
-stdout+stderr raises :class:`ModelUnavailableError` — orch never retries or
-swaps the model. Bare numeric provider codes (``401``/``402``) are matched on
-**stderr only**, because an agent's own transcript (stdout) legitimately contains
-numbers like "HTTP 401 handling" and matching those would fail a healthy run. A
-wall-clock timeout kills the whole process group and returns a ``timed_out=True``
-result; the adapter deliberately does **not** raise
+Failure policy (mirrors the no-substitution law): a provider/auth signature
+raises :class:`ModelUnavailableError` — orch never retries or swaps the model.
+The signature is read from **stderr** (CLI-level failures) and from the stdout
+stream's **error events** (provider failures) — never from the rest of the
+stream, which is transcript: ``authz.ts`` literally contains ``'unauthorized'``
+and ``'Invalid API key.'``, and scanning those words out of file content once
+failed a healthy run (pilot finding 2026-10-16; the same task then completed
+under the fixed scan). Bare numeric provider codes (``401``/``402``) are
+likewise matched on **stderr only**, for the same reason ("HTTP 401 handling"
+is prose). A wall-clock timeout kills the whole process group and returns a
+``timed_out=True`` result; the adapter deliberately does **not** raise
 :class:`AdapterTimeout` itself because escalating is the caller's decision. A
 run that produces no session id when one is required also fails closed.
 """
@@ -35,11 +39,20 @@ from pathlib import Path
 from orch.adapters.base import AgentRunResult
 from orch.errors import ModelUnavailableError, OrchError
 
-#: Word signatures that mean the pinned model is unusable; checked over
-#: stdout+stderr because a provider/auth failure may be printed on either stream.
-MODEL_UNAVAILABLE_RE = re.compile(
-    r"(?i)no such model|model .*not found|unauthorized|invalid api key"
-)
+#: Word signatures that mean the pinned model is unusable. Trusted on **stderr**
+#: (CLI-level failures) and inside the stdout stream's error events — never in the
+#: agent's transcript, whose text and tool output legitimately quote the same
+#: words (``authz.ts`` quotes ``'unauthorized'`` and ``'Invalid API key.'``;
+#: matching those once failed a healthy run — pilot finding 2026-10-16).
+_WORD_SIGNATURES = r"no such model|model .*not found|unauthorized|invalid api key"
+MODEL_UNAVAILABLE_RE = re.compile(rf"(?i){_WORD_SIGNATURES}")
+
+#: Error-event messages carry the provider's own vocabulary and name the failure
+#: directly — probed against a bogus model id: ``{"type":"error","error":
+#: {"type":"provider.no-route","message":"Model unavailable: <id>"}}``. The word
+#: "unavailable" is trusted *only* here: on stderr it is too generic, and in the
+#: transcript it would be prose.
+MODEL_UNAVAILABLE_ERROR_RE = re.compile(rf"(?i)unavailable|{_WORD_SIGNATURES}")
 
 #: Bare numeric provider codes, matched on **stderr only**. An agent's own
 #: transcript (stdout) can contain a number like 401 in prose ("HTTP 401
@@ -83,6 +96,28 @@ def parse_jsonl(output: str) -> tuple[list[dict], str | None, str]:
             if isinstance(chunk, str):
                 texts.append(chunk)
     return lines, session_id, "".join(texts)
+
+
+def provider_error_text(lines: list[dict]) -> str:
+    """The stream's ``type == "error"`` event payloads, one per line.
+
+    A provider failure is a first-class error event on stdout (the probed shape
+    of an unavailable model is exactly one ``{"type":"error","error":
+    {"type":"provider.no-route","message":"Model unavailable: …"}}`` line with an
+    empty stderr). Only these payloads are scanned for the word signatures; the
+    rest of the stream is transcript and file content. The error's ``type`` is
+    included so a typed error with no message still contributes its vocabulary.
+    """
+    parts: list[str] = []
+    for event in lines:
+        if not isinstance(event, dict) or event.get("type") != "error":
+            continue
+        err = event.get("error")
+        if isinstance(err, dict):
+            parts.append(f"{err.get('type') or ''} {err.get('message') or ''}")
+        elif err is not None:
+            parts.append(str(err))
+    return "\n".join(parts)
 
 
 class OpenCodeAdapter:
@@ -156,12 +191,17 @@ class OpenCodeAdapter:
 
         lines, captured_session, text = parse_jsonl(out)
 
-        if MODEL_UNAVAILABLE_RE.search(err + out) or MODEL_UNAVAILABLE_CODE_RE.search(
+        event_errors = provider_error_text(lines)
+        matched = (
             err
-        ):
+            if MODEL_UNAVAILABLE_RE.search(err) or MODEL_UNAVAILABLE_CODE_RE.search(err)
+            else event_errors
+            if MODEL_UNAVAILABLE_ERROR_RE.search(event_errors)
+            else None
+        )
+        if matched is not None:
             raise ModelUnavailableError(
-                f"pinned model {self.model!r} is unavailable: "
-                f"{(err or out).strip()[:500]}"
+                f"pinned model {self.model!r} is unavailable: {matched.strip()[:500]}"
             )
 
         if captured_session is None and not timed_out:
