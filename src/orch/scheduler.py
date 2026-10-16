@@ -17,6 +17,12 @@ The returned `state` is what the graph routes on:
 * ``"ok"`` — dispatch this (possibly empty) list. An empty list *with* work in
   flight is normal: the graph waits for an in-flight task's ``integrate`` to
   finish and re-enter the scheduler.
+
+"In flight" therefore means every status that has work outstanding in the graph
+but is not yet Integrated: `IMPLEMENTING`, `REVIEW`, `FIXING` and `APPROVED`. An
+Approved task is reviewed but not merged — its ``integrate`` branch may still be
+pending, so it occupies a concurrency slot (and its files stay claimed) and must
+never be mistaken for a deadlock; see `_IN_FLIGHT`.
 """
 
 from pathlib import PurePosixPath
@@ -24,7 +30,9 @@ from typing import Literal, NamedTuple
 
 from orch.state import TStatus
 
-_IN_FLIGHT = frozenset({TStatus.IMPLEMENTING, TStatus.REVIEW, TStatus.FIXING})
+_IN_FLIGHT = frozenset(
+    {TStatus.IMPLEMENTING, TStatus.REVIEW, TStatus.FIXING, TStatus.APPROVED}
+)
 
 
 class DispatchDecision(NamedTuple):

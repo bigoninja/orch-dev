@@ -103,7 +103,10 @@ def test_every_dependency_must_be_integrated():
 # --- In-flight accounting ---------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [TStatus.IMPLEMENTING, TStatus.REVIEW, TStatus.FIXING])
+@pytest.mark.parametrize(
+    "status",
+    [TStatus.IMPLEMENTING, TStatus.REVIEW, TStatus.FIXING, TStatus.APPROVED],
+)
 def test_each_in_flight_status_consumes_a_slot(status):
     tasks = {"A": task("A", files=("src/a.py",)), "B": task("B", files=("src/b.py",))}
     state = tstate(("A", status), ("B", TStatus.PENDING))
@@ -120,6 +123,29 @@ def test_empty_dispatch_with_work_in_flight_is_ok_not_deadlock():
 
     # The graph waits: A's integrate completion re-enters the scheduler.
     assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision([], "ok")
+
+
+def test_an_approved_task_is_in_flight_not_a_deadlock():
+    tasks = {"A": task("A", files=("src/a.py",))}
+    state = tstate(("A", TStatus.APPROVED))
+
+    # Reviewed but not yet integrated: its `integrate` branch is still pending,
+    # so the scheduler waits (`"ok"` with an empty dispatch), never `"deadlock"`.
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision([], "ok")
+
+
+def test_a_task_blocked_by_an_approved_task_waits_without_deadlock():
+    tasks = {"A": task("A", files=("src/a.py",)), "B": task("B", depends_on=("A",), files=("src/b.py",))}
+    state = tstate(("A", TStatus.APPROVED), ("B", TStatus.PENDING))
+
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision([], "ok")
+
+
+def test_an_approved_task_consumes_a_concurrency_slot():
+    tasks = {"A": task("A", files=("src/a.py",)), "B": task("B", files=("src/b.py",))}
+    state = tstate(("A", TStatus.APPROVED), ("B", TStatus.PENDING))
+
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=1) == DispatchDecision([], "ok")
 
 
 def test_concurrency_already_reached_dispatches_nothing():
