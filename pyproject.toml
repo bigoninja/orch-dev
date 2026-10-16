@@ -2,7 +2,16 @@
 name = "orch"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = ["langgraph", "langgraph-checkpoint-sqlite", "pydantic>=2", "pyyaml"]
+# langgraph is pinned to the verified minor line: orch.graph reads the node-local
+# state view through langgraph private internals (`CONFIG_KEY_READ`), so a bumped
+# read contract must be re-verified, not adopted implicitly. See
+# tests/e2e/test_e2e_parallel_isolation.py.
+dependencies = [
+    "langgraph>=1.2,<1.3",
+    "langgraph-checkpoint-sqlite",
+    "pydantic>=2",
+    "pyyaml",
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]
