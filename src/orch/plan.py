@@ -1,3 +1,4 @@
+import re
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -6,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from orch.errors import PlanValidationError
 
 CHECK_KEYS = frozenset({"test", "lint", "typecheck", "other"})
+
+_FENCED_YAML_RE = re.compile(r"```yaml[^\n]*\n(.*?)```", re.DOTALL)
 
 # (task_id | None, code, message)
 Issue = tuple[str | None, str, str]
@@ -117,3 +120,36 @@ def load_plan(path: Path) -> Plan:
         return Plan.model_validate(raw)
     except (yaml.YAMLError, ValidationError, OSError) as e:
         raise PlanValidationError([f"invalid plan {path}: {e}"]) from e
+
+
+def parse_planner_output(text: str) -> Plan:
+    """Extract the last fenced ```yaml block containing ``run_id:`` and validate its shape.
+
+    Deliberately does NOT call ``validate_plan``: semantic validation (duplicate ids,
+    unknown deps, cycles, check keys) stays a separate step so that a structurally
+    valid but semantically flawed plan can still be written to ``plan.invalid.yaml``.
+    """
+    blocks = _FENCED_YAML_RE.findall(text)
+    if not blocks:
+        raise PlanValidationError(["planner output contains no ```yaml block"])
+
+    candidates: list[object] = []
+    last_yaml_error: str | None = None
+    for block in blocks:
+        try:
+            loaded = yaml.safe_load(block)
+        except yaml.YAMLError as e:
+            last_yaml_error = f"planner yaml block is not valid yaml: {e}"
+            continue
+        if isinstance(loaded, dict) and "run_id" in loaded:
+            candidates.append(loaded)
+    if not candidates:
+        if last_yaml_error is not None:
+            raise PlanValidationError([last_yaml_error])
+        raise PlanValidationError(["planner output has no ```yaml block containing run_id"])
+
+    try:
+        return Plan.model_validate(candidates[-1])
+    except ValidationError as e:
+        raise PlanValidationError([f"planner output does not match the plan schema: {e}"]) from e
+
