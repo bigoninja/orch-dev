@@ -198,6 +198,65 @@ def test_retries_exhausted_pauses_then_a_human_retry_completes(tmp_path):
     assert final["summary"] == "run R1: 1/1 integrated"
 
 
+def test_a_retry_with_a_bogus_task_id_parks_the_real_task(tmp_path):
+    scenario = {
+        "A": {
+            "implement": [
+                {"edits": [{"file": "app.txt", "content": "nope 1"}]},
+                {"edits": [{"file": "app.txt", "content": "nope 2"}]},
+                {"edits": [{"file": "app.txt", "content": "nope 3"}]},
+            ],
+            "review": [{"verdict": "approve"}],
+        }
+    }
+    _cfg, run_dir, graph, _adapter = _boot(tmp_path, [_task("A")], scenario)
+    paused = _approve_and_run(graph, run_dir)
+    assert paused["escalation"]["kind"] == "task_retries_exhausted"
+
+    # The resume value is untrusted: an id the plan never heard of must not be
+    # dispatched (which would raise ``KeyError`` in ``TaskDef``) — the task that
+    # actually escalated is parked instead.
+    final = _resume(graph, {"action": "retry", "task_id": "NOPE"})
+
+    assert final["task_state"]["A"]["status"] == TStatus.ESCALATED
+    assert final["escalation"]["kind"] == "task_retries_exhausted"
+    assert final["escalation"]["task_id"] == "A"
+
+
+def test_a_retry_naming_a_different_task_leaves_it_untouched(tmp_path):
+    scenario = {
+        "A": {
+            "implement": [
+                {"edits": [{"file": "app.txt", "content": "nope 1"}]},
+                {"edits": [{"file": "app.txt", "content": "nope 2"}]},
+                {"edits": [{"file": "app.txt", "content": "nope 3"}]},
+            ],
+            "review": [{"verdict": "approve"}],
+        },
+        "B": {
+            "implement": [{"edits": [{"file": "b.txt", "content": "OK"}]}],
+            "review": [{"verdict": "approve"}],
+        },
+    }
+    # ``B`` depends on ``A``, so it stays PENDING while ``A`` exhausts its retries.
+    _cfg, run_dir, graph, _adapter = _boot(
+        tmp_path, [_task("A"), _task("B", file="b.txt", depends_on=("A",))], scenario
+    )
+    paused = _approve_and_run(graph, run_dir)
+    assert paused["escalation"]["task_id"] == "A"
+    assert paused["task_state"]["B"]["status"] == TStatus.PENDING
+
+    # A retry that names a *different* (but valid) task must not reset or dispatch it;
+    # the task that escalated is parked.
+    final = _resume(graph, {"action": "retry", "task_id": "B"})
+
+    assert final["task_state"]["A"]["status"] == TStatus.ESCALATED
+    state_b = final["task_state"]["B"]
+    assert state_b["status"] == TStatus.PENDING, "B must not be reset or dispatched"
+    assert state_b["attempts"] == 0
+    assert final["escalation"]["kind"] == "task_retries_exhausted"
+
+
 # --- 4. blocked → fix recovery ------------------------------------------------
 
 

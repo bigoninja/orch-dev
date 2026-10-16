@@ -231,9 +231,11 @@ def t_escalate(state: GState, *, cfg: Config, run_dir: RunDir) -> Command:
 
     The run stops on a checkpointed ``interrupt(state["escalation"])``. On resume with
     ``{"action": "retry", "task_id": X}`` the task is reset to ``PENDING`` with a
-    fresh budget (``human_retry`` is recorded) and re-dispatched; a deadlock retry
-    (no task) clears the escalation and re-enters the scheduler; anything else marks
-    the failing task ``ESCALATED`` and ends the run at ``report``.
+    fresh budget (``human_retry`` is recorded) and re-dispatched; a plan-level
+    escalation (no task) clears the escalation and re-enters the scheduler; anything
+    else — including a retry that names an unknown or a different task — marks the
+    failing task ``ESCALATED`` and ends the run at ``report``. The resume value is
+    untrusted input, so the task id is validated against the escalation and the plan.
     """
     escalation = state.get("escalation")
     if escalation is None:
@@ -243,30 +245,38 @@ def t_escalate(state: GState, *, cfg: Config, run_dir: RunDir) -> Command:
     decision = interrupt(escalation)
 
     if isinstance(decision, dict) and decision.get("action") == "retry":
-        tid = decision.get("task_id") or escalation.get("task_id")
-        if tid:
-            updates = {
-                "escalation": {"clear": True},
-                "task_state": {
-                    tid: {
-                        "status": TStatus.PENDING,
-                        "attempts": 0,
-                        "fix_attempts": 0,
-                        "human_retry": True,
-                        "violation": None,
-                        "last_error": None,
-                    }
-                },
-            }
-            snapshot_run(run_dir, cfg, state, updates=updates)
-            return Command(update=updates, goto=Send("t_implement", {"task_id": tid}))
-        if escalation.get("kind") == "deadlock":
+        tid = escalation.get("task_id")
+        if tid is None:
+            # A plan-level escalation (deadlock): there is no task to retry, so any
+            # ``task_id`` in the resume value is ignored and the scheduler re-decides.
             updates = {"escalation": {"clear": True}}
             snapshot_run(run_dir, cfg, state, updates=updates)
             return Command(update=updates, goto="scheduler")
-        updates = {"escalation": {"clear": True}}
+
+        # The resume value is untrusted: retry must name *this* task, and a task the
+        # plan actually knows. Anything else parks the task that escalated rather than
+        # resetting a different one or dispatching an unknown id.
+        requested = decision.get("task_id") or tid
+        if requested != tid or tid not in (state.get("tasks") or {}):
+            updates = {"task_state": {tid: {"status": TStatus.ESCALATED}}}
+            snapshot_run(run_dir, cfg, state, updates=updates)
+            return Command(update=updates, goto="report")
+
+        updates = {
+            "escalation": {"clear": True},
+            "task_state": {
+                tid: {
+                    "status": TStatus.PENDING,
+                    "attempts": 0,
+                    "fix_attempts": 0,
+                    "human_retry": True,
+                    "violation": None,
+                    "last_error": None,
+                }
+            },
+        }
         snapshot_run(run_dir, cfg, state, updates=updates)
-        return Command(update=updates, goto="report")
+        return Command(update=updates, goto=Send("t_implement", {"task_id": tid}))
 
     tid = escalation.get("task_id")
     if tid:
