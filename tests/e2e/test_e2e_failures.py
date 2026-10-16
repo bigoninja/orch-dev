@@ -201,7 +201,7 @@ def test_retries_exhausted_pauses_then_a_human_retry_completes(tmp_path):
 # --- 4. blocked → fix recovery ------------------------------------------------
 
 
-def test_blocked_implement_recovers_via_a_fix_and_records_last_error(tmp_path):
+def test_blocked_implement_recovers_via_a_fix_that_consumes_last_error(tmp_path):
     scenario = {
         "A": {
             "implement": [
@@ -217,12 +217,42 @@ def test_blocked_implement_recovers_via_a_fix_and_records_last_error(tmp_path):
 
     state = final["task_state"]["A"]
     assert state["status"] == TStatus.INTEGRATED, state["status"]
-    assert state["last_error"] == "BLOCKED: cannot do it"
     assert state["fix_attempts"] == 1
 
     fixes = _calls(adapter, "fix")
     assert len(fixes) == 1
     assert "BLOCKED: cannot do it" in fixes[0]["prompt"]
+    # ``last_error`` is a one-shot marker: it survives until the fix consumes it, and
+    # never persists past that fix into the integrated record.
+    assert state["last_error"] is None
+
+
+def test_a_marker_consumed_by_a_fix_never_shadows_a_later_review_reject(tmp_path):
+    scenario = {
+        "A": {
+            "implement": [
+                {"blocked": "cannot do it"},
+                {"edits": [{"file": "app.txt", "content": "OK"}]},
+                {"edits": [{"file": "app.txt", "content": "OK two"}]},
+            ],
+            "review": [
+                {"verdict": "reject", "findings": ["needs a comment"]},
+                {"verdict": "approve"},
+            ],
+        }
+    }
+    cfg, run_dir, graph, adapter = _boot(tmp_path, [_task("A")], scenario)
+
+    final = _approve_and_run(graph, run_dir)
+
+    fixes = _calls(adapter, "fix")
+    assert len(fixes) == 2, "BLOCKED and then the reject each need one fix"
+    assert "BLOCKED: cannot do it" in fixes[0]["prompt"]
+    # The reject's fix must see the verdict's finding — not the BLOCKED text the first
+    # fix already consumed.
+    assert "needs a comment" in fixes[1]["prompt"]
+    assert "BLOCKED" not in fixes[1]["prompt"]
+    assert final["task_state"]["A"]["status"] == TStatus.INTEGRATED
 
 
 # --- 5. violation: stray edit is never committed ------------------------------

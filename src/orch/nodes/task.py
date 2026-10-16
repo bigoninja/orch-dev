@@ -314,6 +314,10 @@ def t_fix(
     classified findings, and works on the same worktree — so the ``files_allowed``
     boundary is recomputed here: a fix that cleans up a stray edit restores a
     committable state.
+
+    ``last_error``/``violation`` are one-shot markers describing the attempt this fix
+    answers: building ``findings`` above consumes them, so a later failure on the same
+    task is classified from its own fresh signals, never from text this fix already saw.
     """
     tid = payload["task_id"]
     task = TaskDef(**state["tasks"][tid])
@@ -322,7 +326,13 @@ def t_fix(
     fix_attempts = record.get("fix_attempts", 0) + 1
     findings = attempt_failures(state["task_state"], tid)
 
-    update: dict = {"status": TStatus.FIXING, "fix_attempts": fix_attempts}
+    update: dict = {
+        "status": TStatus.FIXING,
+        "fix_attempts": fix_attempts,
+        # Consumed into `findings`; recomputed below for this attempt's own outcome.
+        "last_error": None,
+        "violation": None,
+    }
     escalation = None
     try:
         result = adapter.run(
