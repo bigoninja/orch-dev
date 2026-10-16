@@ -1,0 +1,190 @@
+"""Scenario-driven mock adapter for token-free tests.
+
+A scenario is a YAML file keyed by task id; each value holds the scripted
+attempts for the ``implement`` and ``review`` phases::
+
+    T1:
+      implement:
+        - {edits: [{file: app.txt, content: "OK one"}]}          # uncommitted
+        - {edits: [{file: app.txt, content: "OK two"}], commit: true}
+        - {blocked: "cannot do it"}
+      review:
+        - {verdict: reject, findings: ["line 2 wrong"]}
+        - {verdict: approve}
+
+The task id is read from the session ``title`` in ``<run-id>/<TASK-ID>/<phase>``
+form. Attempt counters advance per ``(task_id, phase)``; ``fix`` attempts share
+the implementer's ``implement`` bucket because a fix is just another attempt on
+the same task. Failures are loud: a missing scenario entry or an exhausted
+attempt list raises rather than fabricating a result.
+"""
+
+import json
+from pathlib import Path
+
+import yaml
+
+from orch.adapters.base import AgentRunResult
+from orch.errors import OrchError
+from orch.gitops import commit_all
+
+
+class MockScenarioError(OrchError):
+    """The scenario has no entry for the requested task or phase."""
+
+
+class MockScenarioExhausted(OrchError):
+    """The scenario's attempt list for a ``(task, phase)`` is used up."""
+
+
+def _parse_title(title: str) -> tuple[str | None, str | None]:
+    """Split ``<run-id>/<TASK-ID>/<phase>`` into ``(task_id, phase)``.
+
+    Returns ``(None, None)`` when the title carries no ``/``-separated task id,
+    so callers can fall back to the scenario's sole task.
+    """
+    parts = title.split("/")
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    return None, None
+
+
+class MockAdapter:
+    """Replays a scripted scenario; deterministic and token-free."""
+
+    def __init__(self, scenario_path: Path):
+        self.scenario: dict = yaml.safe_load(Path(scenario_path).read_text()) or {}
+        # Attempt counters, keyed by (task_id, phase-bucket).
+        self._phase_calls: dict[tuple[str, str], int] = {}
+        # Total calls per task id, for mock session numbering.
+        self._task_calls: dict[str, int] = {}
+
+    # -- resolution -----------------------------------------------------------
+
+    def _task_id(self, title: str) -> str:
+        task_id, _ = _parse_title(title)
+        if task_id is None:
+            if len(self.scenario) == 1:
+                return next(iter(self.scenario))
+            raise MockScenarioError(
+                f"cannot derive task id from title {title!r}; expected "
+                f"'<run-id>/<TASK-ID>/<phase>'; scenario has {sorted(self.scenario)}"
+            )
+        if task_id not in self.scenario:
+            raise MockScenarioError(
+                f"no scenario entry for task {task_id!r} (have "
+                f"{sorted(self.scenario)})"
+            )
+        return task_id
+
+    @staticmethod
+    def _bucket(role: str, phase: str | None) -> str:
+        """Map a role/phase pair onto its scenario attempt list.
+
+        Either signal naming a review is enough; otherwise the call draws from
+        the implementer's list (so ``implement`` and ``fix`` share a bucket).
+        """
+        if role == "review" or phase == "review":
+            return "review"
+        return "implement"
+
+    def _next_entry(self, task_id: str, bucket: str) -> dict:
+        entries = self.scenario.get(task_id, {}).get(bucket)
+        if entries is None:
+            raise MockScenarioError(
+                f"scenario for task {task_id!r} has no {bucket!r} phase"
+            )
+        key = (task_id, bucket)
+        n = self._phase_calls.get(key, 0)
+        if n >= len(entries):
+            raise MockScenarioExhausted(
+                f"scenario for {task_id}/{bucket} exhausted after {n} call(s)"
+            )
+        self._phase_calls[key] = n + 1
+        return entries[n]
+
+    # -- adapter protocol -----------------------------------------------------
+
+    def run(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        cwd: Path,
+        session_id: str | None,
+        title: str,
+        env: dict[str, str],
+    ) -> AgentRunResult:
+        task_id = self._task_id(title)
+        _, phase = _parse_title(title)
+        bucket = self._bucket(role, phase)
+
+        self._task_calls[task_id] = self._task_calls.get(task_id, 0) + 1
+        session = session_id or f"ses_mock_{task_id}_{self._task_calls[task_id]}"
+        entry = self._next_entry(task_id, bucket)
+
+        if bucket == "review":
+            return self._review_result(entry, session)
+        return self._implement_result(entry, task_id, title, Path(cwd), session)
+
+    # -- phase builders -------------------------------------------------------
+
+    @staticmethod
+    def _review_result(entry: dict, session: str) -> AgentRunResult:
+        """Return ``text`` already shaped for the reviewer verdict contract (§8)."""
+        verdict = {
+            "verdict": entry["verdict"],
+            "risky": bool(entry.get("risky", False)),
+            # Scenario findings are plain strings; wrap each in the strict shape.
+            "findings": [
+                {"severity": "major", "file": "", "note": str(f)}
+                for f in entry.get("findings") or []
+            ],
+            "summary": "mock review",
+        }
+        text = json.dumps(verdict)
+        return AgentRunResult(
+            session_id=session,
+            exit_code=0,
+            stdout=text,
+            stderr="",
+            timed_out=False,
+            text=text,
+            raw_json=[{"type": "text", "text": text}],
+        )
+
+    @staticmethod
+    def _implement_result(
+        entry: dict, task_id: str, title: str, cwd: Path, session: str
+    ) -> AgentRunResult:
+        blocked = entry.get("blocked")
+        if blocked is not None:
+            text = f"BLOCKED: {blocked}"
+            return AgentRunResult(
+                session_id=session,
+                exit_code=0,
+                stdout=text,
+                stderr="",
+                timed_out=False,
+                text=text,
+                raw_json=[{"type": "text", "text": text}],
+            )
+
+        edits = entry.get("edits", [])
+        for e in edits:
+            dest = cwd / e["file"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(e["content"])
+        if entry.get("commit"):
+            commit_all(cwd, f"mock: {title}")
+
+        text = f"mock {task_id}: applied {len(edits)} edit(s)"
+        return AgentRunResult(
+            session_id=session,
+            exit_code=0,
+            stdout=text,
+            stderr="",
+            timed_out=False,
+            text=text,
+            raw_json=[{"type": "text", "text": text}],
+        )
