@@ -22,6 +22,16 @@ form. Attempt counters advance per ``(task_id, phase)``; ``fix`` attempts share
 the implementer's ``implement`` bucket because a fix is just another attempt on the
 same task. Failures are loud: a missing scenario entry or an exhausted
 attempt list raises rather than fabricating a result.
+
+The ``planner`` role has its **own** top-level scenario bucket (a list of
+``{text: "..."}`` entries), not a per-task one, because a plan is produced once
+per run before any task exists::
+
+    planner:
+      - {text: "```yaml\\nrun_id: r\\n...\\n```"}
+
+Its title is ``<run-id>/planner``; the reply text is returned verbatim for the
+planner node to parse.
 """
 
 import json
@@ -88,9 +98,12 @@ class MockAdapter:
 
         Either signal naming a review is enough; a fix phase (``fix1``, ``fix2``, …)
         is another attempt on the same task, so it shares the implementer's list.
+        The planner has its own top-level bucket: it is not a task attempt.
         """
         if role == "review" or phase == "review":
             return "review"
+        if role == "planner" or phase == "planner":
+            return "planner"
         if phase is not None and phase.startswith("fix"):
             return "implement"
         return "implement"
@@ -110,6 +123,20 @@ class MockAdapter:
         self._phase_calls[key] = n + 1
         return entries[n]
 
+    def _next_planner_entry(self) -> dict:
+        """Consume the next ``planner`` entry from the scenario's top-level bucket."""
+        entries = self.scenario.get("planner")
+        if entries is None:
+            raise MockScenarioError("scenario has no 'planner' bucket")
+        key = ("planner", "planner")
+        n = self._phase_calls.get(key, 0)
+        if n >= len(entries):
+            raise MockScenarioExhausted(
+                f"scenario for planner exhausted after {n} call(s)"
+            )
+        self._phase_calls[key] = n + 1
+        return entries[n]
+
     # -- adapter protocol -----------------------------------------------------
 
     def run(
@@ -122,10 +149,23 @@ class MockAdapter:
         title: str,
         env: dict[str, str],
     ) -> AgentRunResult:
-        task_id = self._task_id(title)
         _, phase = _parse_title(title)
         bucket = self._bucket(role, phase)
 
+        if bucket == "planner":
+            session = session_id or "ses_mock_planner"
+            text = self._next_planner_entry()["text"]
+            return AgentRunResult(
+                session_id=session,
+                exit_code=0,
+                stdout=text,
+                stderr="",
+                timed_out=False,
+                text=text,
+                raw_json=[{"type": "text", "text": text}],
+            )
+
+        task_id = self._task_id(title)
         self._task_calls[task_id] = self._task_calls.get(task_id, 0) + 1
         session = session_id or f"ses_mock_{task_id}_{self._task_calls[task_id]}"
         entry = self._next_entry(task_id, bucket)
