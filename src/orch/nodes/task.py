@@ -289,19 +289,25 @@ def t_commit(
     """Commit the worker's changes — unless they crossed the ``files_allowed`` line.
 
     Review Focus #1: a violation must never be committed, so it is routed through the
-    fix budget before ``git add``; a worker that changed nothing is flagged in
-    ``notes`` and left to the reviewer to judge.
+    fix budget before ``git add``. The marker from the implement attempt is not
+    trusted alone: the boundary is RE-derived from the worktree at commit time, so a
+    fix round cannot slip a stray edit past it (the live pilot's t1 fix completed
+    ``web/package-lock.json`` off-list — necessary and approved, but the commit gate
+    must re-check). A worker that changed nothing is flagged in ``notes`` and left to
+    the reviewer to judge.
     """
     tid = payload["task_id"]
     task = TaskDef(**state["tasks"][tid])
     record = state["task_state"].get(tid) or {}
     worktree = task_worktree(cfg, tid)
 
-    violation = record.get("violation")
+    violation = list(record.get("violation") or []) or allowed_violation(
+        worktree, task.files_allowed
+    )
     if violation:
         # Never commit a stray edit: route through the same budget as any other
         # fixable failure so a clean fix can restore the boundary.
-        update: dict = {}
+        update: dict = {"violation": list(violation)}
         updates: dict = {"task_state": {tid: update}}
         goto, exhausted = fix_or_escalate(state, payload, cfg=cfg)
         _fail(updates, update, exhausted)

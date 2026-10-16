@@ -489,3 +489,48 @@ def test_a_crash_after_the_first_integrate_resumes_without_double_merging(
     integration = cfg.target_repo / cfg.worktree_root / "orch-integration"
     merges = git(integration, "log", "--oneline", "--merges").stdout.splitlines()
     assert len(merges) == 2, f"expected one merge per task, got {merges}"
+
+
+def test_a_stray_edit_introduced_by_a_fix_is_caught_at_commit_time(tmp_path):
+    """The live pilot's gap, pinned: a fix that makes the checks pass but ALSO strays
+    outside ``files_allowed`` must be caught when the commit gate RE-DERIVES the
+    boundary — the implement-time marker alone was consumed by the fix.
+
+    Sequence: attempt 1 leaves the check RED (clean edits only) -> fix #1 turns the
+    check GREEN but adds ``stray.txt`` -> t_commit refuses and routes one more fix ->
+    fix #2 removes the stray -> the task integrates with no commit ever containing it.
+    """
+    scenario = {
+        "A": {
+            "implement": [
+                {"edits": [{"file": "app.txt", "content": "NOPE"}]},  # check red, no violation
+                {
+                    "edits": [
+                        {"file": "app.txt", "content": "OK"},
+                        {"file": "stray.txt", "content": "stray"},
+                    ]
+                },  # fix #1: green checks, but strays
+                {"delete": ["stray.txt"]},  # fix #2 cleans the boundary
+            ],
+            "review": [{"verdict": "approve"}],
+        }
+    }
+    cfg, run_dir, graph, adapter = _boot(tmp_path, [_task("A")], scenario)
+
+    final = _approve_and_run(graph, run_dir)
+
+    state = final["task_state"]["A"]
+    assert state["status"] == TStatus.INTEGRATED, state["status"]
+    assert state["fix_attempts"] == 2
+
+    fixes = _calls(adapter, "fix")
+    assert len(fixes) == 2
+    assert "edited disallowed path: stray.txt" in fixes[1]["prompt"], (
+        "the commit gate must classify the fix-round stray into the next fix findings"
+    )
+
+    # Nothing on the task branch may contain the stray edit, at any commit.
+    touched = git(
+        cfg.target_repo, "diff", "--name-only", f"{cfg.base_ref}..agent/A"
+    ).stdout.splitlines()
+    assert touched == ["app.txt"], f"agent/A touched {touched}"
