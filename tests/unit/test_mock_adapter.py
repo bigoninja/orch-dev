@@ -234,3 +234,16 @@ def test_exhausted_scenario_fails_loud(tmp_path):
     with pytest.raises(MockScenarioExhausted):
         a.run(role="implement", prompt="p", cwd=wd, session_id=None,
               title="r/T1/implement", env={})
+
+
+def test_tool_commands_surface_as_shell_tool_parts(tmp_path):
+    """The destructive scan reads tool-call commands, not prose: a scenario entry's
+    tool_commands must appear as completed shell parts in raw_json."""
+    wd = tmp_path / "wd"; wd.mkdir(); _init_git(wd)
+    scen = {"T1": {"implement": [{"edits": [{"file": "app.txt", "content": "OK"}],
+                                 "tool_commands": ["git push origin main"]}]}}
+    a = _adapter(tmp_path, scen=scen)
+    r = a.run(role="implement", prompt="p", cwd=wd, session_id=None,
+              title="r/T1/implement", env={})
+    from orch.guard import extract_tool_commands
+    assert extract_tool_commands(r.raw_json) == ["git push origin main"]

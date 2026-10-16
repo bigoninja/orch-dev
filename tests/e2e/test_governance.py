@@ -99,7 +99,7 @@ DESTRUCTIVE_SCENARIO = {
         "implement": [
             {
                 "edits": [{"file": "a.txt", "content": "OK"}],
-                "text": "about to run: git push origin main",
+                "tool_commands": ["git push origin main"],
             },
             # A spare attempt: an unintended fix route would consume it and fail the
             # scenario loudly instead of silently passing the assertions below.

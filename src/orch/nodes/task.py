@@ -36,7 +36,7 @@ from orch.gitops import (
     diff_three_dot,
     ensure_worktree,
 )
-from orch.guard import is_pre_authorized, scan_destructive
+from orch.guard import extract_tool_commands, is_pre_authorized, scan_destructive
 from orch.nodes import escalation_record, merge_updates, passthrough_env
 from orch.plan import TaskDef
 from orch.prompts import build_fix_prompt, build_review_prompt, build_task_prompt
@@ -208,10 +208,12 @@ def t_implement(
     except ModelUnavailableError as e:
         escalation = escalation_record("model_unavailable", str(e), tid)
     else:
-        # Governance: the orchestrator does not sandbox the worker's shell, so a
-        # destructive command anywhere in the transcript is a hard stop — immediate
-        # and unfixable (never routed through the fix budget).
-        hits = scan_destructive(result.stdout + result.text)
+        # Governance: the orchestrator does not sandbox the worker's shell, so an
+        # EXECUTED destructive command is a hard stop — immediate and unfixable
+        # (never routed through the fix budget). Only tool-call commands are
+        # scanned: prose and tool output (e.g. a deploy runbook the worker read)
+        # are not actions.
+        hits = scan_destructive("\n".join(extract_tool_commands(result.raw_json)))
         if hits:
             escalation = escalation_record(
                 "destructive_command", "; ".join(hits), tid

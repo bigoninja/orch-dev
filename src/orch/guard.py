@@ -22,11 +22,13 @@ from orch.errors import Escalation
 
 #: The destructive-command deny-list, in the pinned order the report preserves.
 DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"rm\s+-rf\s+/"),
+    # Temp-directory cleanup is not the hazard; `rm -rf /`, /etc, /usr, /home are.
+    re.compile(r"rm\s+-rf\s+/(?!tmp\b|var/tmp\b|dev/shm\b)"),
     re.compile(r"DROP\s+TABLE"),
     re.compile(r"git\s+push\b"),
     re.compile(r"git\s+reset\s+--hard"),
-    re.compile(r"curl[^|]*\|\s*sh"),
+    # `\b` keeps the pipeline check from matching `| shasum`.
+    re.compile(r"curl[^|]*\|\s*sh\b"),
     re.compile(r":\(\)\{:\|:&\};:"),
 )
 
@@ -39,6 +41,35 @@ def scan_destructive(text: str) -> list[str]:
     """
     hits = [pattern.pattern for pattern in DESTRUCTIVE_PATTERNS if pattern.search(text)]
     return list(dict.fromkeys(hits))
+
+
+def extract_tool_commands(raw_json: list[dict] | None) -> list[str]:
+    """Shell commands the worker ACTUALLY ran, from the JSONL tool events.
+
+    Only executed tool calls count: assistant prose and tool *outputs* are
+    deliberately excluded — a file that merely mentions ``git reset --hard``
+    (e.g. a deploy runbook the worker read) is not a destructive action. The
+    first live pilot escalation was exactly that false positive.
+    """
+    commands: list[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "tool":
+                state = node.get("state")
+                if isinstance(state, dict):
+                    inp = state.get("input")
+                    if isinstance(inp, dict) and isinstance(inp.get("command"), str):
+                        commands.append(inp["command"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    for line in raw_json or []:
+        walk(line)
+    return commands
 
 
 def is_pre_authorized(approval: dict | None, task_id: str) -> bool:

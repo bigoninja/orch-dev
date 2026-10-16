@@ -27,8 +27,10 @@ one:
 * ``timed_out: true`` — the attempt hits the adapter's wall-clock timeout; the
   result carries ``timed_out=True`` with no edits and no verdict, so the caller
   escalates rather than reading it as a pass (any entry, any phase).
-* ``text: "..."`` — overrides the reply text (and ``stdout``), so a scenario can
-  put an arbitrary log line — e.g. a destructive command — in front of the graph.
+* ``text: "..."`` — overrides the reply text and ``stdout`` (prose only).
+* ``tool_commands: ["...", ...]`` — shell commands the attempt "ran": each becomes
+  a completed ``shell`` tool part in ``raw_json``, which is what the destructive
+  scan reads (prose and tool outputs are deliberately not scanned).
 
 The task id is read from the session ``title`` in ``<run-id>/<TASK-ID>/<phase>``
 form. Attempt counters advance per ``(task_id, phase)``; ``fix`` attempts share
@@ -261,6 +263,18 @@ class MockAdapter:
             commit_all(cwd, f"mock: {title}")
 
         text = entry.get("text") or f"mock {task_id}: applied {len(edits)} edit(s)"
+        raw: list[dict] = [{"type": "text", "text": text}]
+        for command in entry.get("tool_commands", []):
+            raw.append(
+                {
+                    "type": "tool",
+                    "part": {
+                        "type": "tool",
+                        "name": "shell",
+                        "state": {"status": "completed", "input": {"command": command}},
+                    },
+                }
+            )
         return AgentRunResult(
             session_id=session,
             exit_code=0,
@@ -268,5 +282,5 @@ class MockAdapter:
             stderr="",
             timed_out=False,
             text=text,
-            raw_json=[{"type": "text", "text": text}],
+            raw_json=raw,
         )
