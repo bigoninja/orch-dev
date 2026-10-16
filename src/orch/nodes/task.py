@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 from langgraph.types import Command, Send
 
 from orch.adapters.base import AgentAdapter
+from orch.activity import running
 from orch.artifacts import RunDir, atomic_write
 from orch.checks import checks_green, run_checks
 from orch.config import Config
@@ -42,6 +43,7 @@ from orch.plan import TaskDef
 from orch.prompts import build_fix_prompt, build_review_prompt, build_task_prompt
 from orch.review import parse_verdict
 from orch.state import TStatus
+from orch.transcript import write_transcript
 
 #: Appended to the reviewer prompt on the single retry after an unparseable reply.
 VERDICT_RETRY_SUFFIX = (
@@ -206,19 +208,39 @@ def t_implement(
     }
     prompt = build_task_prompt(task, run_id=state["run_id"], repo_note=f"Worktree: {worktree}")
 
+    role = work_role(record, "implement")
+    title = f"{state['run_id']}/{tid}/implement"
     escalation = None
     try:
-        result = adapter.run(
-            role=work_role(record, "implement"),
-            prompt=prompt,
-            cwd=worktree,
-            session_id=None,
-            title=f"{state['run_id']}/{tid}/implement",
-            env=passthrough_env(cfg),
-        )
+        # Publish the turn as in-flight for its whole duration: ``state.json`` is
+        # only written when this node returns, so without this a board cannot tell
+        # that the task is implementing (see ``orch.activity``).
+        with running(
+            run_dir, tid, phase="implement", role=role, model=cfg.model_for(role), title=title
+        ):
+            result = adapter.run(
+                role=role,
+                prompt=prompt,
+                cwd=worktree,
+                session_id=None,
+                title=title,
+                env=passthrough_env(cfg),
+            )
     except ModelUnavailableError as e:
         escalation = escalation_record("model_unavailable", str(e), tid)
     else:
+        # Keep the turn's transcript: a failure (a destructive command, a timeout)
+        # is when the chat is most worth having, so it is written before any of the
+        # governance branches below can divert the turn.
+        write_transcript(
+            run_dir,
+            tid,
+            phase="implement",
+            role=role,
+            model=cfg.model_for(role),
+            prompt=prompt,
+            result=result,
+        )
         # Governance: the orchestrator does not sandbox the worker's shell, so an
         # EXECUTED destructive command is a hard stop — immediate and unfixable
         # (never routed through the fix budget). Only tool-call commands are
@@ -362,18 +384,32 @@ def t_fix(
         "violation": None,
     }
     escalation = None
+    role = work_role(record, "fix")
+    title = f"{state['run_id']}/{tid}/fix{fix_attempts}"
     try:
-        result = adapter.run(
-            role=work_role(record, "fix"),
-            prompt=build_fix_prompt(task, findings),
-            cwd=worktree,
-            session_id=record.get("session_id"),
-            title=f"{state['run_id']}/{tid}/fix{fix_attempts}",
-            env=passthrough_env(cfg),
-        )
+        with running(
+            run_dir, tid, phase="fix", role=role, model=cfg.model_for(role), title=title
+        ):
+            result = adapter.run(
+                role=role,
+                prompt=build_fix_prompt(task, findings),
+                cwd=worktree,
+                session_id=record.get("session_id"),
+                title=title,
+                env=passthrough_env(cfg),
+            )
     except ModelUnavailableError as e:
         escalation = escalation_record("model_unavailable", str(e), tid)
     else:
+        write_transcript(
+            run_dir,
+            tid,
+            phase=f"fix{fix_attempts}",
+            role=role,
+            model=cfg.model_for(role),
+            prompt=build_fix_prompt(task, findings),
+            result=result,
+        )
         if result.timed_out:
             escalation = escalation_record(
                 "adapter_timeout",
@@ -422,19 +458,32 @@ def t_review(
     escalation = None
     for attempt in range(2):
         try:
-            result = adapter.run(
-                role="review",
-                prompt=prompt if attempt == 0 else prompt + VERDICT_RETRY_SUFFIX,
-                cwd=worktree,
-                session_id=None,
-                title=title,
-                env=passthrough_env(cfg),
-            )
+            with running(
+                run_dir, tid, phase="review", role="review",
+                model=cfg.model_for("review"), title=title,
+            ):
+                result = adapter.run(
+                    role="review",
+                    prompt=prompt if attempt == 0 else prompt + VERDICT_RETRY_SUFFIX,
+                    cwd=worktree,
+                    session_id=None,
+                    title=title,
+                    env=passthrough_env(cfg),
+                )
         except ModelUnavailableError as e:
             # A model error is not a verdict problem: escalate at once (mirroring
             # ``t_implement``) rather than retrying the same unusable model.
             escalation = escalation_record("model_unavailable", str(e), tid)
             break
+        write_transcript(
+            run_dir,
+            tid,
+            phase="review" if attempt == 0 else "review-retry",
+            role="review",
+            model=cfg.model_for("review"),
+            prompt=prompt,
+            result=result,
+        )
         if result.timed_out:
             escalation = escalation_record(
                 "adapter_timeout",

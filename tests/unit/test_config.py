@@ -111,3 +111,13 @@ def test_blank_role_model_rejected(tmp_path: Path):
     cfg_file.write_text(f"target_repo: {repo}\nrole_models:\n  planner: ''\n")
     with pytest.raises(ConfigError, match="non-empty"):
         load_config(cfg_file)
+
+
+def test_model_for_prefers_a_role_override_and_falls_back_to_the_default():
+    cfg = Config(
+        target_repo=Path("/tmp/repo"),
+        model="vendor/default",
+        role_models={"implement": "vendor/fast"},
+    )
+    assert cfg.model_for("implement") == "vendor/fast"
+    assert cfg.model_for("review") == "vendor/default"

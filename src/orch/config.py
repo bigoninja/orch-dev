@@ -19,6 +19,16 @@ ROLE_NAMES = frozenset({"planner", "implement", "review", "fix", "repair"})
 TEMPLATE_NOTE = "# orch configuration — see README.md\n"
 
 
+def resolve_role_model(model: str, role_models: dict[str, str], role: str) -> str:
+    """The model pinned for ``role``: its override, else the run default.
+
+    One implementation with two callers — the adapter (which pins it on the
+    ``opencode run`` command line) and the pipeline nodes (which label the live
+    activity channel) must never disagree about which model a role is running.
+    """
+    return role_models.get(role, model)
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +66,10 @@ class Config(BaseModel):
         if any(not model for model in value.values()):
             raise ValueError("role_models values must be non-empty")
         return value
+
+    def model_for(self, role: str) -> str:
+        """The model this run pins for ``role`` (see :func:`resolve_role_model`)."""
+        return resolve_role_model(self.model, self.role_models, role)
 
 
 def load_config(path: Path) -> Config:

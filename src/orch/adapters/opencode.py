@@ -37,6 +37,7 @@ import subprocess
 from pathlib import Path
 
 from orch.adapters.base import AgentRunResult
+from orch.config import resolve_role_model
 from orch.errors import ModelUnavailableError, OrchError
 
 #: Word signatures that mean the pinned model is unusable. Trusted on **stderr**
@@ -144,7 +145,7 @@ class OpenCodeAdapter:
 
     def model_for(self, role: str) -> str:
         """The model pinned for ``role``: its override, else the run default."""
-        return self.role_models.get(role, self.model)
+        return resolve_role_model(self.model, self.role_models, role)
 
     def run(
         self,
