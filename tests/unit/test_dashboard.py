@@ -136,6 +136,8 @@ def test_http_serves_page_payload_and_404(tmp_path: Path):
             assert "orch dashboard" in page and "/api/state" in page
             assert 'id="board"' in page
             assert "Ready to merge" in page and "Needs you" in page
+            assert 'id="view-status"' in page and 'id="view-cards"' in page
+            assert 'class="nav"' in page and 'id="brief"' not in page
 
         with urllib.request.urlopen(base + "/api/state") as resp:
             data = json.loads(resp.read().decode("utf-8"))

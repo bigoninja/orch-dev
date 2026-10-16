@@ -72,28 +72,39 @@ _PAGE = """<!doctype html>
   .card .foot { display: flex; justify-content: space-between; gap: 8px;
                 align-items: center; color: #8b949e; font-size: 12px; margin-top: 6px; }
   .col .empty { color: #484f58; font-size: 12px; padding: 8px 4px; }
+  .nav { display: flex; justify-content: center; gap: 8px; padding: 12px 24px 0; }
+  .navlink { padding: 6px 20px; border-radius: 999px; border: 1px solid #21262d;
+             color: #8b949e; text-decoration: none; font-size: 13px; font-weight: 600; }
+  .navlink.active { background: #1f6feb33; color: #79c0ff; border-color: #1f6feb66; }
   footer { padding: 0 24px 24px; color: #484f58; font-size: 12px; }
 </style>
 </head>
 <body>
 <header>
   <h1>orch dashboard <span id="runid" class="sub"></span></h1>
-  <div id="brief" class="sub"></div>
   <div class="bar">
     <span id="state" class="pill">…</span>
     <span id="integ" class="sub"></span>
     <span class="sub">→ <span id="branch"></span></span>
   </div>
 </header>
+<nav class="nav">
+  <a href="#status" id="nav-status" class="navlink active">Status</a>
+  <a href="#cards" id="nav-cards" class="navlink">Cards</a>
+</nav>
 <div id="banner"></div>
+<section id="view-status">
 <main>
   <table>
     <thead><tr><th>Task</th><th>Title</th><th>State</th><th>Attempts</th><th>Review</th><th>Notes</th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </main>
+</section>
+<section id="view-cards" hidden>
 <div class="board-title">Board</div>
 <div id="board" class="board"></div>
+</section>
 <footer><span id="updated">connecting…</span> · auto-refresh every 3s</footer>
 <script>
 function pillEl(status) {
@@ -179,7 +190,7 @@ async function tick() {
   if (d.error) { document.getElementById('banner').style.display = 'block';
                  document.getElementById('banner').textContent = d.error; return; }
   document.getElementById('runid').textContent = d.run_id;
-  document.getElementById('brief').textContent = d.brief;
+  document.getElementById('runid').title = d.brief;
   const st = document.getElementById('state');
   st.textContent = d.run_state;
   st.className = 'pill ' + d.run_state.toLowerCase();
@@ -217,6 +228,17 @@ async function tick() {
   renderBoard(d.tasks);
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
+function setView(view) {
+  const isCards = view === 'cards';
+  document.getElementById('view-status').hidden = isCards;
+  document.getElementById('view-cards').hidden = !isCards;
+  document.getElementById('nav-status').classList.toggle('active', !isCards);
+  document.getElementById('nav-cards').classList.toggle('active', isCards);
+}
+window.addEventListener('hashchange', () => {
+  setView(location.hash === '#cards' ? 'cards' : 'status');
+});
+setView(location.hash === '#cards' ? 'cards' : 'status');
 tick();
 setInterval(tick, 3000);
 </script>
