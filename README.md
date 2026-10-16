@@ -4,6 +4,10 @@
 
 # orch
 
+<p align="center">
+  <img src="assets/dashboard-preview.gif" alt="orch dashboard — live task table and kanban board" />
+</p>
+
 **Parallel agent development with review parity.**
 
 `orch` is a [LangGraph](https://github.com/langchain-ai/langgraph) control plane that executes an approved plan as a task DAG: several coding-agent tasks in flight at once, each implemented by a headless [OpenCode](https://opencode.ai) session in its own git worktree, each independently reviewed, and each merged into a single **integration branch** only after review *and* checks pass.
@@ -20,7 +24,7 @@ Sequential agent workflows are safe but slow: each task waits for the one before
 - **Deterministic pass/fail** — checks are shell commands the *orchestrator* runs in the task worktree. Exit codes are the truth; output is archived as evidence. Worker self-reports are advisory only.
 - **Nothing unreviewed merges** — only Approved tasks merge, only into the integration branch, only with `--no-ff`. `main` and remotes are never touched; orch never pushes.
 - **A scheduler you can explain** — readiness, concurrency caps, file-ownership exclusion, deadlock detection, and merge decisions are plain Python over the plan. Two tasks whose `files_allowed` overlap never run concurrently.
-- **One pinned model, no substitution** — every role runs the configured model; if it's unavailable, the run *stops and escalates* instead of silently falling back.
+- **One pinned model per role, no substitution** — every role runs the model configured for it (the run `model`, or its `role_models` override); if it's unavailable, the run *stops and escalates* instead of silently falling back.
 - **Risk is pre-authorized, not assumed** — pattern-flagged tasks (migrations, auth, payments, …) are listed at the approval gate for explicit pre-authorization; runtime surprises (reviewer `risky: true`, destructive commands, retries exhausted) still stop the run.
 - **Crash-safe by construction** — one SQLite checkpoint store per run; `orch resume` re-enters exactly where the graph stopped. After approval the plan is hash-pinned — a modified `plan.yaml` is refused.
 - **Single-writer discipline** — a run lock (`state/orch.lock`) prevents concurrent runs over one state; a dirty tracked tree refuses run start.
@@ -112,7 +116,8 @@ Every command takes `--config <path>` (default `orch.config.yaml`) and `--run <i
 | `base_ref` | `main` | Ref the integration branch forks from |
 | `integration_branch` | `orch/integration` | Where Approved tasks merge |
 | `worktree_root` | `.worktrees` | Per-task worktrees, relative to `target_repo` |
-| `model` | `opencode/deepseek-v4.1-flash-free` | The one model all roles run on; substitution forbidden |
+| `model` | `opencode/deepseek-v4.1-flash-free` | Default model for every role; a role listed in `role_models` overrides it |
+| `role_models` | `{}` | Per-role model pins, keyed `planner`/`implement`/`review`/`fix`/`repair`; unlisted roles use `model`. Configured pins, not runtime substitutions |
 | `concurrency` | `3` | Max tasks in flight (1–8) |
 | `retries` | `2` | Fix attempts after the first implement (0–5) |
 | `timeout_minutes` | `45` | Per role-step timeout (min 5) |
@@ -168,7 +173,7 @@ Hard-stops (`destructive_command`, `adapter_timeout`, `verdict_unparseable`, `ch
 
 ## Design principles
 
-- **OpenCode sessions are the sole LLM runtime** — planning, implementation, and review all run as `opencode run` subprocesses pinned to one model. The planner has real repo tools, the reviewer can execute checks inside the task worktree, and review independence comes from fresh sessions.
+- **OpenCode sessions are the sole LLM runtime** — planning, implementation, and review all run as `opencode run` subprocesses pinned to their configured role model. The planner has real repo tools, the reviewer can execute checks inside the task worktree, and review independence comes from fresh sessions.
 - **Deterministic scheduler, no LLM supervisor** — a wrong schedule is a bug to fix in code, not a prompt to tune, and the whole loop is reproducible under the Mock adapter.
 - **Orchestrator-owned commits** — the worker's self-report is advisory; the orchestrator stages, commits, and generates the diff it hands to review.
 - **Exactly one bounded repair** per integration failure that is clearly local to a single task; anything else escalates to a human.
