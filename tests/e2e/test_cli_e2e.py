@@ -292,6 +292,50 @@ def test_run_refuses_when_the_lock_is_held(tmp_path, demo_repo, monkeypatch, cap
     assert "another run holds the lock" in out
 
 
+def test_approve_refuses_when_the_lock_is_held(tmp_path, demo_repo, monkeypatch, capsys):
+    cfg_path, run_dir = _boot(tmp_path, demo_repo, monkeypatch, SCENARIO)
+    assert main(["run", "--config", str(cfg_path)]) == 0
+    capsys.readouterr()
+
+    # A second terminal holds the lock: approve must not touch the run at all.
+    with run_lock(Path(tmp_path / "state")):
+        rc = main(["approve", "--run", "R1", "--config", str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "another run holds the lock" in out
+    state = _state(run_dir)
+    assert not state.get("summary"), "a locked-out approve must not resume the run"
+    assert state["task_state"]["A"]["status"] == "pending"
+
+
+def test_resume_refuses_when_the_lock_is_held(tmp_path, demo_repo, monkeypatch, capsys):
+    exhausted = {
+        "A": {
+            "implement": [
+                {"edits": [{"file": "a.txt", "content": "nope 1"}]},
+                {"edits": [{"file": "a.txt", "content": "nope 2"}]},
+                {"edits": [{"file": "a.txt", "content": "nope 3"}]},
+            ],
+            "review": [{"verdict": "approve"}],
+        }
+    }
+    cfg_path, run_dir = _boot(tmp_path, demo_repo, monkeypatch, exhausted)
+    assert main(["run", "--yes", "--config", str(cfg_path)]) == 2
+    capsys.readouterr()
+
+    # A second terminal holds the lock: resume must not touch the run at all.
+    with run_lock(Path(tmp_path / "state")):
+        rc = main(["resume", "--run", "R1", "--config", str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "another run holds the lock" in out
+    state = _state(run_dir)
+    assert state["escalation"]["kind"] == "task_retries_exhausted"
+    assert state["task_state"]["A"]["status"] == "escalated"
+
+
 # --- error paths ---------------------------------------------------------------
 
 

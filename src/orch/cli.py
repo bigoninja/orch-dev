@@ -295,7 +295,8 @@ def _edit_plan(run_dir) -> bool:
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
-    from orch.errors import PlanValidationError
+    from orch.artifacts import run_lock
+    from orch.errors import LockHeldError, PlanValidationError
     from orch.plan import flag_risky, load_plan, validate_plan
 
     cfg, rc = _config_or_error(args.config)
@@ -306,40 +307,53 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return 1
     run_id = run_dir.root.name
 
-    with _graph(cfg, run_dir) as graph:
-        at_gate = _pending_interrupt(graph, run_id)
-        if at_gate is None or "plan_path" not in _interrupt_value(at_gate):
-            print("error: the run is not paused at the approval gate; nothing to approve")
-            print(f"next: orch status --run {run_id}")
-            return 1
+    try:
+        with run_lock(Path(cfg.state_dir)):
+            with _graph(cfg, run_dir) as graph:
+                at_gate = _pending_interrupt(graph, run_id)
+                if at_gate is None or "plan_path" not in _interrupt_value(at_gate):
+                    print(
+                        "error: the run is not paused at the approval gate; "
+                        "nothing to approve"
+                    )
+                    print(f"next: orch status --run {run_id}")
+                    return 1
 
-        if args.edit and not _edit_plan(run_dir):
-            return 1
+                if args.edit and not _edit_plan(run_dir):
+                    return 1
 
-        try:
-            plan = load_plan(run_dir.plan_path)
-        except PlanValidationError as e:
-            for issue in e.issues:
-                print(f"issue: {issue}")
-            return 1
+                try:
+                    plan = load_plan(run_dir.plan_path)
+                except PlanValidationError as e:
+                    for issue in e.issues:
+                        print(f"issue: {issue}")
+                    return 1
 
-        # A human may edit the plan at the gate, so re-validate before resuming —
-        # an invalid plan is refused here, never executed.
-        issues = validate_plan(plan, cfg.risky_patterns)
-        if issues:
-            for task_id, code, message in issues:
-                print(f"issue: {task_id or '-'}: {code}: {message}")
-            return 1
+                # A human may edit the plan at the gate, so re-validate before
+                # resuming — an invalid plan is refused here, never executed.
+                issues = validate_plan(plan, cfg.risky_patterns)
+                if issues:
+                    for task_id, code, message in issues:
+                        print(f"issue: {task_id or '-'}: {code}: {message}")
+                    return 1
 
-        plan = flag_risky(plan, cfg.risky_patterns)
-        risky = [task.id for task in plan.tasks if task.risky]
-        pre_authorized = risky if args.accept_risky else []
-        result = _resume(graph, run_id, _gate_payload(run_dir, pre_authorized=pre_authorized))
+                plan = flag_risky(plan, cfg.risky_patterns)
+                risky = [task.id for task in plan.tasks if task.risky]
+                pre_authorized = risky if args.accept_risky else []
+                result = _resume(
+                    graph, run_id, _gate_payload(run_dir, pre_authorized=pre_authorized)
+                )
+    except LockHeldError as e:
+        print(f"error: {e}")
+        return 1
 
     return _outcome(result, run_dir=run_dir, run_id=run_id)
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
+    from orch.artifacts import run_lock
+    from orch.errors import LockHeldError
+
     cfg, rc = _config_or_error(args.config)
     if cfg is None:
         return rc
@@ -348,19 +362,24 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return 1
     run_id = run_dir.root.name
 
-    with _graph(cfg, run_dir) as graph:
-        pending = _pending_interrupt(graph, run_id)
-        value = _interrupt_value(pending) if pending is not None else {}
-        if "kind" in value:
-            # A paused escalation: apply the human's decision (retry this task).
-            decision: dict = {"action": "retry"}
-            if args.task:
-                decision["task_id"] = args.task
-            result = _resume(graph, run_id, decision)
-        else:
-            # A crash (no interrupt) — or a gate pause, which just re-pauses — is a
-            # plain re-entry from the last checkpoint.
-            result = _continue(graph, run_id)
+    try:
+        with run_lock(Path(cfg.state_dir)):
+            with _graph(cfg, run_dir) as graph:
+                pending = _pending_interrupt(graph, run_id)
+                value = _interrupt_value(pending) if pending is not None else {}
+                if "kind" in value:
+                    # A paused escalation: apply the human's decision (retry this task).
+                    decision: dict = {"action": "retry"}
+                    if args.task:
+                        decision["task_id"] = args.task
+                    result = _resume(graph, run_id, decision)
+                else:
+                    # A crash (no interrupt) — or a gate pause, which just re-pauses —
+                    # is a plain re-entry from the last checkpoint.
+                    result = _continue(graph, run_id)
+    except LockHeldError as e:
+        print(f"error: {e}")
+        return 1
 
     return _outcome(result, run_dir=run_dir, run_id=run_id)
 
