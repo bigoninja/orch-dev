@@ -13,12 +13,22 @@ Strictly read-only: it never touches the graph, the lock, or the target repo.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
 
+from orch.activity import read_activity
 from orch.artifacts import RunDir
+from orch.transcript import read_turns
 
 _TERMINAL_OK = {"integrated"}
+
+#: A live activity phase mapped onto the status the board shows. Only a
+#: non-terminal committed status may be overridden, so a stale entry left by a
+#: killed run can never resurrect a task that already integrated or escalated.
+_LIVE_STATUS = {"implement": "implementing", "fix": "fixing", "review": "review"}
+_LIVE_OVERRIDABLE = {"pending", "implementing", "fixing", "review"}
 
 _LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 295 90"><g fill="#ffffff" transform="matrix(5.2863438788431925,0,0,5.2863438788431925,122.97796302478926,0.19823858340447487)"><path d="M4.24 14.15Q2.83 14.15 1.89 13.27Q0.95 12.38 0.95 10.49L0.95 10.49Q0.95 9.21 1.41 8.39Q1.86 7.57 2.60 7.20Q3.35 6.83 4.24 6.83L4.24 6.83Q5.14 6.83 5.87 7.20Q6.61 7.57 7.06 8.39Q7.52 9.21 7.52 10.49L7.52 10.49Q7.52 11.77 7.06 12.59Q6.61 13.41 5.87 13.78Q5.14 14.15 4.24 14.15L4.24 14.15ZM4.24 12.81Q4.90 12.81 5.38 12.27Q5.87 11.73 5.87 10.49L5.87 10.49Q5.87 9.25 5.38 8.71Q4.90 8.18 4.24 8.18L4.24 8.18Q3.57 8.18 3.09 8.71Q2.60 9.24 2.60 10.49L2.60 10.49Q2.60 11.73 3.09 12.27Q3.57 12.81 4.24 12.81L4.24 12.81ZM14.97 8.22Q14.29 8.22 13.82 8.53Q13.34 8.83 13.13 9.23L13.13 9.23L13.13 12.67L15.34 12.67L15.34 14L9.84 14L9.84 12.67L11.55 12.67L11.55 8.33L9.84 8.33L9.84 7L12.71 7L12.98 7.85Q13.36 7.36 13.93 7.10Q14.50 6.83 15.25 6.83L15.25 6.83Q15.92 6.83 16.45 7.10L16.45 7.10L15.99 8.44Q15.92 8.37 15.64 8.29Q15.37 8.22 14.97 8.22L14.97 8.22ZM24.32 12.57Q23.39 14.15 21.52 14.15L21.52 14.15Q20.03 14.15 19.09 13.27Q18.14 12.38 18.14 10.49L18.14 10.49Q18.14 8.58 19.08 7.71Q20.02 6.83 21.52 6.83L21.52 6.83Q22.43 6.83 23.14 7.22Q23.84 7.62 24.32 8.51L24.32 8.51L22.89 9.28Q22.44 8.18 21.48 8.18L21.48 8.18Q20.71 8.18 20.24 8.72Q19.78 9.27 19.78 10.49L19.78 10.49Q19.78 11.69 20.24 12.25Q20.71 12.81 21.48 12.81L21.48 12.81Q22.39 12.81 22.89 11.83L22.89 11.83L24.32 12.57ZM29.97 6.85Q31.23 6.85 31.84 7.57Q32.45 8.30 32.45 9.97L32.45 9.97L32.45 14L30.88 14L30.88 10.56Q30.88 9.69 30.79 9.20Q30.70 8.71 30.42 8.45Q30.14 8.19 29.58 8.19L29.58 8.19Q28.90 8.19 28.43 8.55Q27.96 8.90 27.73 9.34L27.73 9.34L27.73 14L26.17 14L26.17 2.80L27.73 2.80L27.73 7.67Q28.13 7.28 28.70 7.06Q29.27 6.85 29.97 6.85L29.97 6.85Z"></path></g><g transform="matrix(1.1111111111111112,0,0,1.1111111111111112,-1.1999982992808071,-6.666666666666671)" stroke="none" fill="#F69800"><path d="M9.9 87H99V14.1H50.4v8.1h40.5v56.699H18V54.601H9.9z"></path><path d="M34.2 14.1h-8.1V6H9.9v24.3H1.8v16.2H18V22.2h16.2v16.2h-8.1v16.201h16.2V14.1z"></path></g></svg>"""
 
@@ -76,10 +86,15 @@ _PAGE = """<!doctype html>
   .board-title { padding: 14px 24px 8px; color: #8b949e; font-size: 12px;
                  text-transform: uppercase; letter-spacing: .06em;
                  border-top: 1px solid #21262d; margin-top: 8px; }
-  .board { display: flex; gap: 14px; padding: 0 24px 24px; overflow-x: auto;
-           align-items: flex-start; }
-  .col { min-width: 250px; width: 250px; background: #161b22;
-         border: 1px solid #21262d; border-radius: 10px; padding: 10px; }
+  .board { display: grid; gap: 14px; padding: 0 24px 24px; box-sizing: border-box;
+           grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+           grid-auto-rows: minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+  /* Seven lanes is the full board, and a 180px floor is what makes them all fit one
+     row on a wide screen (7 x 180 + 6 gaps = 1344 <= the board's content box) with
+     no lane stranded alone on a second row. Narrower than that, or with the chat
+     pane open, they wrap — which is the point: never a sideways scroll. */
+  .col { background: #161b22; border: 1px solid #21262d; border-radius: 10px;
+         padding: 10px; overflow-y: auto; min-height: 0; }
   .col h2 { margin: 2px 4px 10px; font-size: 12px; text-transform: uppercase;
             letter-spacing: .04em; color: #8b949e; display: flex;
             justify-content: space-between; align-items: baseline; }
@@ -87,6 +102,15 @@ _PAGE = """<!doctype html>
   .card { background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
           padding: 10px 12px; margin-bottom: 10px; transition: border-color .15s ease; }
   .card:hover { border-color: #30363d; }
+  .card.is-live { border-color: #1f6feb66; }
+  .card .live { display: flex; align-items: center; gap: 6px; color: #79c0ff;
+                font-size: 12px; margin: 2px 0 6px; min-width: 0; }
+  .card .live span:last-child { overflow: hidden; text-overflow: ellipsis;
+                                white-space: nowrap; }
+  .spinner { width: 11px; height: 11px; border-radius: 50%; flex: none;
+             border: 2px solid #30363d; border-top-color: #79c0ff;
+             animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .card .t { font-weight: 600; margin-bottom: 4px; }
   .card .repo { color: #8b949e; font-size: 12px; margin-bottom: 8px;
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -104,9 +128,47 @@ _PAGE = """<!doctype html>
   a:focus-visible, button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
   footer { padding: 0 24px 24px; color: var(--faint); font-size: 12px; }
   footer.disconnected { color: #f0883e; }
+  #view-cards { display: flex; flex-direction: column;
+                max-height: calc(100vh - 214px); }
+  #view-cards[hidden] { display: none; }
+  .split { display: flex; align-items: stretch; flex: 1 1 auto; min-height: 0; }
+  #board-wrap { flex: 1 1 auto; min-width: 0; display: flex;
+                flex-direction: column; min-height: 0; }
+  /* Cards left, chat right: a fixed-width sidebar, expandable over the board. */
+  #chat { flex: 0 0 460px; min-width: 0; display: flex; flex-direction: column;
+          border-left: 1px solid #21262d; padding: 14px 16px 8px; min-height: 0; }
+  #chat[hidden] { display: none; }
+  #view-cards.maximized #chat { flex: 1 1 auto; border-left: none; }
+  #view-cards.maximized #board-wrap { display: none; }
+  .chat-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .chat-title { font-weight: 600; margin-right: auto; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+  .chat-head button, .opencode-link { background: #21262d; color: #e6edf3;
+      border: 1px solid #30363d; border-radius: 6px; padding: 3px 9px;
+      font: inherit; font-size: 12px; cursor: pointer; }
+  .chat-head button:hover, .opencode-link:hover { background: #30363d; }
+  .chat-body { overflow-y: auto; flex: 1 1 auto; }
+  .turn-head { color: var(--faint); font-size: 12px; text-transform: uppercase;
+               letter-spacing: .05em; margin: 12px 0 6px; }
+  .msg { border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 13px;
+         white-space: pre-wrap; word-break: break-word; }
+  .msg.user { background: #161b22; border: 1px solid #21262d; color: #8b949e; }
+  .msg.agent { background: #0d1117; border: 1px solid #21262d; }
+  .msg.tool { background: #1f6feb1a; border: 1px solid #1f6feb33; color: #79c0ff;
+              font-size: 12px; }
+  .msg.note { background: #db6d281a; border: 1px solid #db6d2833; color: #f0883e; }
+  .opencode-link { display: block; margin: 4px 0 14px; }
+  .card { cursor: pointer; text-align: left; width: 100%; font: inherit;
+          color: inherit; }
+  .card[aria-pressed="true"] { border-color: #1f6feb; }
   @media (max-width: 760px) {
     th:nth-child(4), td:nth-child(4),
     th:nth-child(5), td:nth-child(5) { display: none; }
+    /* A fixed sidebar is meaningless at this width: the chat takes the top. */
+    .split { flex-direction: column; }
+    #chat { flex: 0 0 auto; max-height: 46vh; border-left: none;
+            border-bottom: 1px solid #21262d; }
+    #view-cards { max-height: none; }
   }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }
@@ -144,8 +206,21 @@ _PAGE = """<!doctype html>
 </main>
 </section>
 <section id="view-cards" hidden>
-<div class="board-title">Board</div>
-<div id="board" class="board" role="list"></div>
+<div class="split">
+  <div id="board-wrap">
+    <div class="board-title">Board</div>
+    <div id="board" class="board"></div>
+  </div>
+  <aside id="chat" hidden aria-label="agent chat">
+    <div class="chat-head">
+      <span id="chat-title" class="chat-title"></span>
+      <button id="chat-max" type="button" aria-pressed="false"
+              aria-label="maximize the chat">«</button>
+      <button id="chat-close" type="button">close</button>
+    </div>
+    <div id="chat-body" class="chat-body" tabindex="0"></div>
+  </aside>
+</div>
 </section>
 <footer><span id="updated">connecting…</span> · auto-refresh every 3s</footer>
 <script>
@@ -156,9 +231,10 @@ function pillEl(status) {
   return s;
 }
 function statusText(t) {
+  if (t.is_repair && (t.status === 'implementing' || t.status === 'fixing')) return 'Repairing';
   switch (t.status) {
     case 'pending': return 'Queued';
-    case 'implementing': return 'Working';
+    case 'implementing': return 'Implementing';
     case 'fixing': return 'Changes requested' + (t.fix_attempts ? ' · fix ' + t.fix_attempts : '');
     case 'review': return 'Review pending';
     case 'approved': return 'Approved — integrating';
@@ -167,14 +243,29 @@ function statusText(t) {
     default: return t.status;
   }
 }
+// One lane per thing a human can act on. A repair runs the ordinary pipeline, so
+// it is told apart from its parent's work by the task's ORIGIN, not its status.
 const COLUMNS = [
-  { key: 'queued',  label: 'Queued',          match: s => s === 'pending' },
-  { key: 'working', label: 'Working',         match: s => s === 'implementing' || s === 'fixing' },
-  { key: 'review',  label: 'In review',       match: s => s === 'review' },
-  { key: 'needs',   label: 'Needs you',       match: s => s === 'escalated' },
-  { key: 'ready',   label: 'Ready to merge',  match: s => s === 'approved' || s === 'integrated' },
+  { key: 'queued',       label: 'Queued',         match: t => t.status === 'pending' },
+  { key: 'implementing', label: 'Implementing',   match: t => t.status === 'implementing' && !t.is_repair },
+  { key: 'repairing',    label: 'Repairing',      match: t => t.is_repair && (t.status === 'implementing' || t.status === 'fixing') },
+  { key: 'fixing',       label: 'Fixing',         match: t => t.status === 'fixing' && !t.is_repair },
+  { key: 'review',       label: 'In review',      match: t => t.status === 'review' },
+  { key: 'needs',        label: 'Needs you',      match: t => t.status === 'escalated' },
+  { key: 'ready',        label: 'Ready to merge', match: t => t.status === 'approved' || t.status === 'integrated' },
 ];
 function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function elapsed(started) {
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(started)) / 1000));
+  if (!isFinite(s)) return '';
+  return s < 60 ? s + 's' : Math.floor(s / 60) + 'm' + (s % 60 ? ' ' + (s % 60) + 's' : '');
+}
+// The live line is real text, not an ARIA-only label, so a screen reader gets it
+// for free and the human can see which model is running and for how long.
+function liveLabel(live) {
+  const parts = [live.role || live.phase, live.model, elapsed(live.started_at)];
+  return parts.filter(Boolean).join(' · ');
+}
 function riskyMark() {
   const m = document.createElement('span');
   m.className = 'risky'; m.textContent = ' ⚑';
@@ -208,6 +299,17 @@ function updateCard(card, t) {
   const repo = document.createElement('div'); repo.className = 'repo';
   repo.textContent = t.branch || ('agent/' + t.id);
   card.appendChild(repo);
+  card.classList.toggle('is-live', Boolean(t.live));
+  if (t.live) {
+    const line = document.createElement('div'); line.className = 'live';
+    const sp = document.createElement('span'); sp.className = 'spinner';
+    sp.setAttribute('aria-hidden', 'true');
+    line.appendChild(sp);
+    const txt = document.createElement('span');
+    txt.textContent = liveLabel(t.live);
+    line.appendChild(txt);
+    card.appendChild(line);
+  }
   const foot = document.createElement('div'); foot.className = 'foot';
   const left = document.createElement('span');
   left.appendChild(pillEl(t.status === 'escalated' ? 'escalated' : t.status));
@@ -224,6 +326,8 @@ function updateCard(card, t) {
     n.textContent = truncate(t.notes, 80);
     card.appendChild(n);
   }
+  card.setAttribute('aria-label', (t.title || t.id) + ' — open chat');
+  card.onclick = () => openChat(t.id);
 }
 // Reconcile children of `parent` against `items`, keyed by id, REUSING nodes so
 // hover and text selection survive the 3s poll (a full rebuild flickers). A node
@@ -252,17 +356,17 @@ function renderBoard(tasks) {
     if (col.dataset.col) existing.set(col.dataset.col, col);
   }
   for (const col of COLUMNS) {
-    const items = tasks.filter(t => col.match(t.status));
+    const items = tasks.filter(col.match);
     let box = existing.get(col.key);
     if (!box) {
       box = document.createElement('div'); box.className = 'col'; box.dataset.col = col.key;
-      box.setAttribute('role', 'listitem');
+      box.setAttribute('role', 'group');
+      box.setAttribute('aria-label', col.label + ' tasks');
       const h = document.createElement('h2');
       const label = document.createElement('span'); label.textContent = col.label;
       const n = document.createElement('span'); n.className = 'n';
       h.appendChild(label); h.appendChild(n); box.appendChild(h);
       const cards = document.createElement('div'); cards.className = 'cards';
-      cards.setAttribute('role', 'list');
       box.appendChild(cards);
     }
     box.querySelector('h2 .n').textContent = items.length;
@@ -276,8 +380,8 @@ function renderBoard(tasks) {
         if (e.classList.contains('empty')) e.remove();
       }
       syncList(cards, items, () => {
-        const c = document.createElement('div');
-        c.className = 'card'; c.setAttribute('role', 'listitem');
+        const c = document.createElement('button');
+        c.type = 'button'; c.className = 'card';
         return c;
       }, updateCard);
     }
@@ -286,7 +390,107 @@ function renderBoard(tasks) {
   for (const [key, box] of existing) {
     if (!COLUMNS.some(c => c.key === key)) box.remove();
   }
+  markSelected();
 }
+
+// --- the chat pane: one task's transcript, opened from its card ----------------
+let selected = null;
+let maximized = false;
+let chatSig = null;
+
+function textEl(s) { const d = document.createElement('div'); d.textContent = s; return d; }
+function noteEl(s) { const d = textEl(s); d.className = 'msg note'; return d; }
+
+function setSplit() {
+  document.getElementById('view-cards').classList.toggle('maximized', maximized);
+  const btn = document.getElementById('chat-max');
+  // The arrow is the visual; the label is what a screen reader announces.
+  // Collapsed: « expands the chat leftwards over the board. Expanded: » restores.
+  const label = maximized ? 'minimize the chat' : 'maximize the chat';
+  btn.textContent = maximized ? '»' : '«';
+  btn.setAttribute('aria-pressed', String(maximized));
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+}
+function markSelected() {
+  for (const c of document.querySelectorAll('#board .card')) {
+    c.setAttribute('aria-pressed', String(c.dataset.id === selected));
+  }
+}
+function renderChat(body, data) {
+  body.replaceChildren();
+  const turns = data.turns || [];
+  if (!turns.length) {
+    body.appendChild(textEl('No transcript recorded for this task yet.'));
+    return;
+  }
+  for (const turn of turns) {
+    const head = document.createElement('div'); head.className = 'turn-head';
+    head.textContent = turn.role + ' · ' + turn.phase + (turn.model ? ' · ' + turn.model : '');
+    body.appendChild(head);
+    const p = document.createElement('div'); p.className = 'msg user';
+    p.textContent = turn.prompt;
+    body.appendChild(p);
+    for (const m of turn.messages) {
+      const d = document.createElement('div');
+      d.className = 'msg ' + (m.kind === 'tool' ? 'tool' : 'agent');
+      d.textContent = m.kind === 'tool'
+        ? ('$ ' + (m.command || m.name) + (m.status ? '  [' + m.status + ']' : ''))
+        : m.text;
+      body.appendChild(d);
+    }
+    if (turn.truncated) body.appendChild(noteEl('transcript truncated — the event cap was reached'));
+    if (turn.session_id) {
+      // The session lives in the project the turn ran in, so the command has to
+      // cd there first. ``opencode --session`` resumes an existing session.
+      const cmd = 'cd ' + (data.worktree || '.') + ' && opencode --session ' + turn.session_id;
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'opencode-link';
+      b.textContent = 'copy: open this session in OpenCode';
+      b.title = cmd;
+      b.onclick = () => {
+        if (navigator.clipboard) navigator.clipboard.writeText(cmd);
+        b.textContent = 'copied: ' + cmd;
+      };
+      body.appendChild(b);
+    }
+  }
+}
+async function refreshChat() {
+  if (!selected) return;
+  let data;
+  try {
+    const r = await fetch('/api/chat/' + encodeURIComponent(selected), { cache: 'no-store' });
+    data = await r.json();
+  } catch (e) { return; }
+  const sig = JSON.stringify(data);
+  if (sig === chatSig) return;   // only re-render when the turn actually changed
+  chatSig = sig;
+  const body = document.getElementById('chat-body');
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  renderChat(body, data);
+  if (atBottom) body.scrollTop = body.scrollHeight;
+}
+function openChat(tid) {
+  selected = tid;
+  chatSig = null;
+  document.getElementById('chat').hidden = false;
+  document.getElementById('chat-title').textContent = tid;
+  setSplit();
+  markSelected();
+  refreshChat();
+}
+function closeChat() {
+  selected = null;
+  chatSig = null;
+  maximized = false;
+  document.getElementById('chat').hidden = true;
+  setSplit();
+  markSelected();
+}
+document.getElementById('chat-close').onclick = closeChat;
+document.getElementById('chat-max').onclick = () => { maximized = !maximized; setSplit(); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) closeChat(); });
 async function tick() {
   let d;
   try {
@@ -333,6 +537,7 @@ async function tick() {
   syncList(tbody, d.tasks, () => document.createElement('tr'), updateRow);
   document.getElementById('rows-empty').hidden = d.tasks.length > 0;
   renderBoard(d.tasks);
+  refreshChat();
   up.textContent = 'updated ' + (d.updated_at || '—');
 }
 function setView(view) {
@@ -372,11 +577,17 @@ def build_dashboard_state(run_dir: RunDir) -> dict:
 
     tasks = data.get("tasks") or {}
     task_state = data.get("task_state") or {}
+    live = read_activity(run_dir)
     rows: list[dict] = []
     integrated = 0
     for tid, tdef in tasks.items():
         st = task_state.get(tid) or {}
         status = str(st.get("status") or "pending")
+        # ``state.json`` only changes when a node returns, so an in-flight turn is
+        # only visible through the live channel (see ``orch.activity``).
+        entry = live.get(tid)
+        if entry and status in _LIVE_OVERRIDABLE:
+            status = _LIVE_STATUS.get(str(entry.get("phase")), status)
         if status in _TERMINAL_OK:
             integrated += 1
         verdicts = st.get("verdicts") or []
@@ -398,6 +609,8 @@ def build_dashboard_state(run_dir: RunDir) -> dict:
                 "notes": notes,
                 "branch": str(st.get("branch") or f"agent/{tid}"),
                 "commits": len(st.get("commits") or []),
+                "is_repair": st.get("origin") == "repair",
+                "live": entry,
             }
         )
 
@@ -429,6 +642,37 @@ def build_dashboard_state(run_dir: RunDir) -> dict:
     }
 
 
+#: A task id becomes a glob under ``evidence/``, so it must be a plain slug: no
+#: separators, no traversal. Anything else is refused outright rather than
+#: sanitized — a task id is never a path.
+_TASK_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def is_valid_task_id(task_id: str) -> bool:
+    """True for a plain task-id slug; never for anything that could be a path."""
+    return bool(_TASK_ID_RE.fullmatch(task_id)) and ".." not in task_id
+
+
+def build_chat_payload(run_dir: RunDir, task_id: str) -> dict:
+    """The recorded turns for ``task_id`` — the chat pane's read-only payload.
+
+    ``worktree`` travels with it because ``opencode --session <id>`` only resolves
+    inside the project the turn ran in, and the worktree is where it ran.
+    """
+    worktree = ""
+    try:
+        data = json.loads(run_dir.state_path.read_text(encoding="utf-8"))
+        record = (data.get("task_state") or {}).get(task_id) or {}
+        worktree = str(record.get("worktree") or "")
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {
+        "task_id": task_id,
+        "worktree": worktree,
+        "turns": read_turns(run_dir, task_id),
+    }
+
+
 def _handler_for(run_dir: RunDir):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 (http.server API)
@@ -437,6 +681,14 @@ def _handler_for(run_dir: RunDir):
                 ctype = "text/html; charset=utf-8"
             elif self.path.startswith("/api/state"):
                 body = json.dumps(build_dashboard_state(run_dir)).encode("utf-8")
+                ctype = "application/json"
+            elif self.path.startswith("/api/chat/"):
+                task_id = unquote(self.path[len("/api/chat/"):])
+                if not is_valid_task_id(task_id):
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                body = json.dumps(build_chat_payload(run_dir, task_id)).encode("utf-8")
                 ctype = "application/json"
             else:
                 self.send_response(404)
