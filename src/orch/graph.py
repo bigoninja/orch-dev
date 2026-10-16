@@ -298,12 +298,13 @@ def _route_after_integrate(state: GState):
     return "t_escalate" if state.get("escalation") is not None else "scheduler"
 
 
-def build_graph(*, cfg: Config, adapter: AgentAdapter, run_dir: RunDir):
+def build_graph(*, cfg: Config, adapter: AgentAdapter, run_dir: RunDir, conn=None):
     """Compile the orchestrator graph with a SQLite checkpointer at ``run_dir``.
 
     The caller invokes with ``config={"configurable": {"thread_id": run_id}}``.
-    The connection is owned by the returned ``SqliteSaver``, which the compiled
-    graph holds.
+    When ``conn`` is given the saver uses it and the caller owns its lifetime (the
+    CLI opens one connection per invocation and closes it); otherwise the
+    connection is opened here and owned by the returned ``SqliteSaver``.
     """
     graph = StateGraph(GState)
 
@@ -351,6 +352,7 @@ def build_graph(*, cfg: Config, adapter: AgentAdapter, run_dir: RunDir):
     # The state carries `TStatus` members, which msgpack stores as a tagged ext;
     # allowlist our own enum so deserialization stays explicit and does not depend
     # on the permissive (and eventually strict) default.
-    conn = sqlite3.connect(str(run_dir.checkpoints_path), check_same_thread=False)
+    if conn is None:
+        conn = sqlite3.connect(str(run_dir.checkpoints_path), check_same_thread=False)
     serde = JsonPlusSerializer(allowed_msgpack_modules=[("orch.state", "TStatus")])
     return graph.compile(checkpointer=SqliteSaver(conn, serde=serde))
