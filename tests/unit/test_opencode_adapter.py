@@ -31,6 +31,12 @@ def _shim_bin(tmp_path: Path, mode: str) -> str:
         "mode = os.environ.get('SHIM_MODE', 'ok')\n"
         "if mode == 'sleep':\n    time.sleep(30)\n"
         "if mode == 'model-error':\n    sys.stderr.write('model not found: nope/nope\\n'); sys.exit(1)\n"
+        "if mode == 'stderr-unauthorized':\n"
+        "    sys.stderr.write('unauthorized: bad api key\\n')\n"
+        "if mode == 'stdout-401':\n"
+        "    print(json.dumps({'type':'text','timestamp':1,'sessionID':'ses_shim',"
+        "'part':{'type':'text','text':'HTTP 401 handling'}}))\n"
+        "    sys.exit(0)\n"
         "print(json.dumps({'type':'text','timestamp':1,'sessionID':'ses_shim','part':{'type':'text','text':'ok'}}))\n"
     )
     shim.chmod(0o755)
@@ -81,6 +87,20 @@ def test_session_flag_passed(tmp_path, monkeypatch):
 def test_model_unavailable_raises(tmp_path, monkeypatch):
     with pytest.raises(ModelUnavailableError):
         _run_with_shim(tmp_path, monkeypatch, "model-error")
+
+
+def test_stdout_401_text_is_not_a_model_error(tmp_path, monkeypatch):
+    # A numeric "401" in the agent's own transcript (stdout) is prose, not a
+    # provider failure: the run must succeed normally.
+    r, _, _ = _run_with_shim(tmp_path, monkeypatch, "stdout-401")
+    assert r.exit_code == 0
+    assert "HTTP 401 handling" in r.text
+
+
+def test_stderr_unauthorized_is_a_model_error(tmp_path, monkeypatch):
+    # The same word signature on stderr is the provider/auth failure it looks like.
+    with pytest.raises(ModelUnavailableError):
+        _run_with_shim(tmp_path, monkeypatch, "stderr-unauthorized")
 
 
 def test_timeout_kills_process_group(tmp_path, monkeypatch):

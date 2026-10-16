@@ -26,7 +26,7 @@ import yaml
 from orch.adapters.base import AgentAdapter
 from orch.artifacts import RunDir, atomic_write
 from orch.config import Config
-from orch.errors import GitError, PlanValidationError
+from orch.errors import GitError, ModelUnavailableError, OrchError, PlanValidationError
 from orch.gitops import git
 from orch.nodes import passthrough_env
 from orch.plan import Plan, dump_plan, flag_risky, parse_planner_output, validate_plan
@@ -113,14 +113,19 @@ def run_planner(
         source_text=source_text,
         repo_facts=gather_repo_facts(cfg.target_repo),
     )
-    result = adapter.run(
-        role="planner",
-        prompt=prompt,
-        cwd=cfg.target_repo,
-        session_id=None,
-        title=f"{run_dir.root.name}/planner",
-        env=passthrough_env(cfg),
-    )
+    try:
+        result = adapter.run(
+            role="planner",
+            prompt=prompt,
+            cwd=cfg.target_repo,
+            session_id=None,
+            title=f"{run_dir.root.name}/planner",
+            env=passthrough_env(cfg),
+        )
+    except ModelUnavailableError as e:
+        # A provider/auth failure is an input-level error the CLI renders, not a
+        # graph path: re-raise as the base class the ``plan`` command reports.
+        raise OrchError(f"planner model unavailable: {e}") from e
 
     invalid_path = run_dir.root / "plan.invalid.yaml"
     try:

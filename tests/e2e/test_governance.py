@@ -64,6 +64,23 @@ MODEL_ERROR_SCENARIO = {
     }
 }
 
+#: The pinned model is unavailable at the *reviewer* step: the implement/checks/commit
+#: path is fine, but the run must still escalate rather than crash.
+REVIEW_MODEL_ERROR_SCENARIO = {
+    "A": {
+        "implement": [{"edits": [{"file": "a.txt", "content": "OK"}]}],
+        "review": [{"raise_model_error": True}],
+    }
+}
+
+#: The reviewer hits the wall-clock timeout: no verdict, so the run escalates.
+REVIEW_TIMEOUT_SCENARIO = {
+    "A": {
+        "implement": [{"edits": [{"file": "a.txt", "content": "OK"}]}],
+        "review": [{"timed_out": True}],
+    }
+}
+
 #: Three failing implements spend the fix budget (``retries: 2``) and pause.
 EXHAUSTED_SCENARIO = {
     "A": {
@@ -164,6 +181,60 @@ def test_model_unavailable_escalates_then_a_clean_rerun_completes(
     assert _state(run_dir)["task_state"]["A"]["status"] == "integrated"
 
 
+def test_review_model_error_escalates_then_a_clean_rerun_completes(
+    tmp_path, demo_repo, monkeypatch, capsys
+):
+    """A model error at the reviewer step escalates, it does not crash the run.
+
+    The implement/checks/commit path succeeds, so the failure lands in ``t_review``;
+    before the fix this raised out of the graph, leaving a crashed process and an
+    unreadable-by-the-contract state. Now it pauses on ``model_unavailable`` and the
+    task is not wedged: fixing the cause and resuming integrates it.
+    """
+    cfg_path, run_dir = _boot(
+        tmp_path, demo_repo, monkeypatch, REVIEW_MODEL_ERROR_SCENARIO, tasks=[TASK]
+    )
+
+    rc = main(["run", "--yes", "--config", str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "model_unavailable" in out
+    state = _state(run_dir)  # state.json is readable: the run paused, not crashed
+    assert state["escalation"]["kind"] == "model_unavailable"
+    assert state["escalation"]["task_id"] == "A"
+    assert not state.get("summary"), "the run must not have finished"
+
+    # The cause is fixed: the same run resumes and completes (not stuck in review).
+    _scenario(tmp_path, SCENARIO)
+
+    rc = main(["resume", "--run", "R1", "--config", str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "run R1: 1/1 integrated" in out
+    assert _state(run_dir)["task_state"]["A"]["status"] == "integrated"
+
+
+def test_review_timeout_escalates_instead_of_reading_as_a_pass(
+    tmp_path, demo_repo, monkeypatch, capsys
+):
+    """A reviewer timeout has no verdict, so it escalates ``adapter_timeout``."""
+    cfg_path, run_dir = _boot(
+        tmp_path, demo_repo, monkeypatch, REVIEW_TIMEOUT_SCENARIO, tasks=[TASK]
+    )
+
+    rc = main(["run", "--yes", "--config", str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "adapter_timeout" in out
+    state = _state(run_dir)
+    assert state["escalation"]["kind"] == "adapter_timeout"
+    assert state["escalation"]["task_id"] == "A"
+    assert not state.get("summary"), "the run must not have finished"
+
+
 # --- (b) plan-hash guard -------------------------------------------------------
 
 
@@ -185,7 +256,11 @@ def test_resume_refuses_after_plan_yaml_changed_until_it_is_restored(
     out = capsys.readouterr().out
     assert rc == 1, out
     assert "plan.yaml changed after approval" in out
-    assert "orch approve --edit" in out
+    # The old remedy advertised ``approve --edit``, which is unreachable from a
+    # plan_changed pause (the run is not at the approval gate). The remedy is now
+    # the honest v1 one: restore the pinned file or restart with a fresh plan.
+    assert "mid-run replanning is a v1 gap" in out
+    assert "orch approve --edit" not in out
     # Nothing was invoked: the run is still parked on its original escalation.
     state = _state(run_dir)
     assert state["escalation"]["kind"] == "task_retries_exhausted"
@@ -286,3 +361,48 @@ def test_untracked_files_do_not_block_the_run(
     assert rc == 0, out
     assert "run R1: 1/1 integrated" in out
     assert _state(run_dir)["task_state"]["A"]["status"] == "integrated"
+
+
+# --- (e) glob ``files_allowed`` boundary ---------------------------------------
+
+
+#: A task that owns a whole directory subtree as a glob and edits inside it.
+GLOB_TASK = {
+    "id": "G",
+    "title": "write the app file under src",
+    "description": "Write the marker OK to src/app.js.",
+    "depends_on": [],
+    "files_allowed": ["src/**"],
+    "acceptance_criteria": ["src/app.js contains OK"],
+    "checks": {"test": {"cmd": "grep -q OK src/app.js"}},
+}
+
+GLOB_SCENARIO = {
+    "G": {
+        "implement": [{"edits": [{"file": "src/app.js", "content": "OK"}]}],
+        "review": [{"verdict": "approve"}],
+    }
+}
+
+
+def test_glob_files_allowed_completes_without_a_violation(
+    tmp_path, demo_repo, monkeypatch, capsys
+):
+    """A change under a glob-``files_allowed`` pattern is not a stray edit.
+
+    The boundary check (``allowed_violation``) must be glob-aware, matching the
+    scheduler's ownership semantics; a literal comparison would flag ``src/app.js``
+    against ``src/**`` and spend the fix budget on a false violation.
+    """
+    cfg_path, run_dir = _boot(
+        tmp_path, demo_repo, monkeypatch, GLOB_SCENARIO, tasks=[GLOB_TASK]
+    )
+
+    rc = main(["run", "--yes", "--config", str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "run R1: 1/1 integrated" in out
+    state = _state(run_dir)
+    assert state["task_state"]["G"]["status"] == "integrated"
+    assert state["task_state"]["G"]["violation"] is None

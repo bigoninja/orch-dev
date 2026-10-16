@@ -22,6 +22,11 @@ one:
 
 * ``raise_model_error: true`` — the pinned model is unusable on this attempt; the
   adapter raises :class:`~orch.errors.ModelUnavailableError` (never substitutes).
+  This applies to any ``implement``, ``fix`` or ``review`` entry, so a test can
+  drive a model failure out of the reviewer too.
+* ``timed_out: true`` — the attempt hits the adapter's wall-clock timeout; the
+  result carries ``timed_out=True`` with no edits and no verdict, so the caller
+  escalates rather than reading it as a pass (any entry, any phase).
 * ``text: "..."`` — overrides the reply text (and ``stdout``), so a scenario can
   put an arbitrary log line — e.g. a destructive command — in front of the graph.
 
@@ -183,6 +188,19 @@ class MockAdapter:
             # substitute (the same law the real adapter enforces).
             raise ModelUnavailableError(
                 f"mock: pinned model unavailable for {task_id}/{bucket}"
+            )
+
+        if entry.get("timed_out"):
+            # The adapter's wall-clock timeout: no edits, no verdict — the caller
+            # decides to escalate (``timed_out=True`` is never a pass).
+            return AgentRunResult(
+                session_id=session,
+                exit_code=-1,
+                stdout="",
+                stderr="",
+                timed_out=True,
+                text="",
+                raw_json=[],
             )
 
         if bucket == "review":

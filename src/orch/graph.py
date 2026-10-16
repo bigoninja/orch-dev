@@ -59,11 +59,22 @@ INTEGRATION_WORKTREE = "orch-integration"
 _STATE_CHANNELS = ["run_id", "tasks", "task_state", "approval", "escalation", "summary"]
 
 
+def merge_task_defs(a: dict, b: dict) -> dict:
+    """``{**a, **b}`` — the ``tasks`` channel reducer.
+
+    Two parallel ``integrate`` nodes can each spawn a Repair task in the same
+    superstep; without a reducer the second write raises ``InvalidUpdateError``.
+    Task ids are unique, so a shallow merge is the whole policy (a later write to
+    the same id wins).
+    """
+    return {**a, **b}
+
+
 class GState(TypedDict):
     """The graph state, locked for Tasks 13–17."""
 
     run_id: str
-    tasks: dict[str, dict]
+    tasks: Annotated[dict[str, dict], merge_task_defs]
     task_state: Annotated[dict[str, dict], merge_task_state]
     approval: Annotated[dict | None, keep_first]
     escalation: Annotated[dict | None, escalation_reducer]

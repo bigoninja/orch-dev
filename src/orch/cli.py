@@ -54,7 +54,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     from orch.adapters.factory import factory
     from orch.artifacts import RunDir
     from orch.config import load_config
-    from orch.errors import ConfigError, PlanValidationError
+    from orch.errors import ConfigError, OrchError, PlanValidationError
     from orch.nodes.planner import run_planner
 
     try:
@@ -86,6 +86,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
             print(f"invalid plan written to {invalid}")
         for issue in e.issues:
             print(f"issue: {issue}")
+        return 1
+    except OrchError as e:
+        # A planner-side model error (or any other orch error) is a pre-run
+        # failure: report it as an error and exit, never crash with a traceback.
+        print(f"error: {e}")
         return 1
 
     risky = [task.id for task in plan.tasks if task.risky]
@@ -368,16 +373,19 @@ def cmd_resume(args: argparse.Namespace) -> int:
             with _graph(cfg, run_dir) as graph:
                 # The plan is immutable after approval: if the file no longer hashes
                 # to the value pinned in the checkpoint, refuse before touching the
-                # graph. ``approve --edit`` is the re-approval path (it hashes the
-                # current file); restoring plan.yaml is the other remedy.
+                # graph. Mid-run replanning is a v1 gap (a ``plan_changed``
+                # escalation pauses away from the approval gate, so ``approve
+                # --edit`` is unreachable): the remedies are restoring the pinned
+                # file or restarting with a fresh plan.
                 try:
                     verify_plan_hash(
                         graph.get_state(_thread(run_id)).values, run_dir
                     )
                 except Escalation:
                     print(
-                        "plan.yaml changed after approval; restore it or "
-                        "re-approve with: orch approve --edit"
+                        f"plan.yaml changed after approval; restore "
+                        f"runs/{run_id}/plan.yaml, or restart the run with a fresh "
+                        f"plan (mid-run replanning is a v1 gap)"
                     )
                     return 1
 

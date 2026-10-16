@@ -16,8 +16,11 @@ orchestrator's launch directory.
 
 Failure policy (mirrors the no-substitution law): a provider/auth signature on
 stdout+stderr raises :class:`ModelUnavailableError` — orch never retries or
-swaps the model. A wall-clock timeout kills the whole process group and returns
-a ``timed_out=True`` result; the adapter deliberately does **not** raise
+swaps the model. Bare numeric provider codes (``401``/``402``) are matched on
+**stderr only**, because an agent's own transcript (stdout) legitimately contains
+numbers like "HTTP 401 handling" and matching those would fail a healthy run. A
+wall-clock timeout kills the whole process group and returns a ``timed_out=True``
+result; the adapter deliberately does **not** raise
 :class:`AdapterTimeout` itself because escalating is the caller's decision. A
 run that produces no session id when one is required also fails closed.
 """
@@ -32,10 +35,17 @@ from pathlib import Path
 from orch.adapters.base import AgentRunResult
 from orch.errors import ModelUnavailableError, OrchError
 
-#: Combined stdout+stderr signatures that mean the pinned model is unusable.
+#: Word signatures that mean the pinned model is unusable; checked over
+#: stdout+stderr because a provider/auth failure may be printed on either stream.
 MODEL_UNAVAILABLE_RE = re.compile(
-    r"(?i)no such model|model .*not found|unauthorized|invalid api key|\b401\b|\b402\b"
+    r"(?i)no such model|model .*not found|unauthorized|invalid api key"
 )
+
+#: Bare numeric provider codes, matched on **stderr only**. An agent's own
+#: transcript (stdout) can contain a number like 401 in prose ("HTTP 401
+#: handling"); treating that as a provider failure would fail a healthy run.
+#: This stderr/stdout split is pinned here on purpose.
+MODEL_UNAVAILABLE_CODE_RE = re.compile(r"\b401\b|\b402\b")
 
 
 def parse_jsonl(output: str) -> tuple[list[dict], str | None, str]:
@@ -146,7 +156,9 @@ class OpenCodeAdapter:
 
         lines, captured_session, text = parse_jsonl(out)
 
-        if MODEL_UNAVAILABLE_RE.search(err + out):
+        if MODEL_UNAVAILABLE_RE.search(err + out) or MODEL_UNAVAILABLE_CODE_RE.search(
+            err
+        ):
             raise ModelUnavailableError(
                 f"pinned model {self.model!r} is unavailable: "
                 f"{(err or out).strip()[:500]}"

@@ -25,6 +25,9 @@ class Config(BaseModel):
     concurrency: int = Field(3, ge=1, le=8)
     retries: int = Field(2, ge=0, le=5)
     timeout_minutes: int = Field(45, ge=5)
+    # Extra vars force-exported to worker/check subprocesses. The child also
+    # inherits the full process environment, so this documents intent — it does
+    # NOT restrict. Never list PWD (the adapter owns it for worktree isolation).
     env_passthrough: list[str] = Field(default_factory=list)
     risky_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_RISKY_PATTERNS))
     notify: str = "none"

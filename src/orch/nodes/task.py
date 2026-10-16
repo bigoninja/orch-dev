@@ -19,7 +19,7 @@ the authoritative checks are green and the ``files_allowed`` boundary is clean.
 """
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from langgraph.types import Command, Send
 
@@ -61,13 +61,21 @@ def task_worktree(cfg: Config, task_id: str) -> Path:
 
 
 def allowed_violation(worktree: Path, files_allowed: list[str]) -> list[str]:
-    """Changed paths that fall outside ``files_allowed``.
+    """Changed paths that no ``files_allowed`` pattern full-matches.
 
-    Literal-path comparison only: the plan's ownership is a hard boundary, and at
-    commit time the worker's literal edits are what matter (glob-aware ownership
-    lives in the scheduler). Sorted so a violation is reproducible.
+    Ownership is declared as globs (``src/**``), so a changed path is allowed iff
+    ANY pattern full-matches it via :meth:`PurePosixPath.full_match`; a literal
+    pattern still matches only itself. At commit time the worker's literal edits
+    are what matter; the boundary fails closed, so an unmatched path is a
+    violation. Sorted so a violation is reproducible.
     """
-    return sorted(set(changed_files(worktree)) - set(files_allowed))
+    changed = set(changed_files(worktree))
+    allowed = {
+        path
+        for path in changed
+        if any(PurePosixPath(path).full_match(pat) for pat in files_allowed)
+    }
+    return sorted(changed - allowed)
 
 
 def attempt_failures(task_state: dict, tid: str) -> list[str]:
@@ -392,21 +400,38 @@ def t_review(
 
     verdict = None
     error = "reviewer reply was never parsed"
+    escalation = None
     for attempt in range(2):
-        result = adapter.run(
-            role="review",
-            prompt=prompt if attempt == 0 else prompt + VERDICT_RETRY_SUFFIX,
-            cwd=worktree,
-            session_id=None,
-            title=title,
-            env=passthrough_env(cfg),
-        )
+        try:
+            result = adapter.run(
+                role="review",
+                prompt=prompt if attempt == 0 else prompt + VERDICT_RETRY_SUFFIX,
+                cwd=worktree,
+                session_id=None,
+                title=title,
+                env=passthrough_env(cfg),
+            )
+        except ModelUnavailableError as e:
+            # A model error is not a verdict problem: escalate at once (mirroring
+            # ``t_implement``) rather than retrying the same unusable model.
+            escalation = escalation_record("model_unavailable", str(e), tid)
+            break
+        if result.timed_out:
+            escalation = escalation_record(
+                "adapter_timeout",
+                f"review timed out after {cfg.timeout_minutes} minute(s)",
+                tid,
+            )
+            break
         try:
             verdict = parse_verdict(result.text)
         except ValueError as e:
             error = str(e)
             continue
         break
+
+    if escalation is not None:
+        return Command(update={"escalation": escalation}, goto="t_escalate")
 
     if verdict is None:
         updates = {"escalation": escalation_record("verdict_unparseable", error, tid)}

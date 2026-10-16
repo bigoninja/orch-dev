@@ -110,6 +110,40 @@ def test_an_attempt_can_raise_model_unavailable(tmp_path):
     assert r.exit_code == 0
 
 
+def test_a_review_attempt_can_raise_model_unavailable(tmp_path):
+    """A reviewer model failure is scripted like an implement one (same law)."""
+    scen = {"T1": {"review": [
+        {"raise_model_error": True},
+        {"verdict": "approve"},
+    ]}}
+    wd = tmp_path / "wd"; wd.mkdir()
+    a = _adapter(tmp_path, scen)
+    with pytest.raises(ModelUnavailableError, match="model unavailable"):
+        a.run(role="review", prompt="p", cwd=wd, session_id=None,
+              title="r/T1/review", env={})
+    # The failure consumed the review attempt: the next call is the approver.
+    obj = json.loads(a.run(role="review", prompt="p", cwd=wd, session_id=None,
+                           title="r/T1/review", env={}).text)
+    assert obj["verdict"] == "approve"
+
+
+def test_a_review_attempt_can_time_out(tmp_path):
+    """``timed_out`` is scriptable on a review entry: a wall-clock timeout, no verdict."""
+    scen = {"T1": {"review": [
+        {"timed_out": True},
+        {"verdict": "approve"},
+    ]}}
+    wd = tmp_path / "wd"; wd.mkdir()
+    a = _adapter(tmp_path, scen)
+    r = a.run(role="review", prompt="p", cwd=wd, session_id=None,
+              title="r/T1/review", env={})
+    assert r.timed_out is True and r.text == ""
+    # The timeout consumed the attempt: the next call is the approver.
+    obj = json.loads(a.run(role="review", prompt="p", cwd=wd, session_id=None,
+                           title="r/T1/review", env={}).text)
+    assert obj["verdict"] == "approve"
+
+
 def test_an_attempt_text_can_be_overridden(tmp_path):
     """A scenario entry may set the reply ``text`` (e.g. a log naming a command)."""
     scen = {"T1": {"implement": [

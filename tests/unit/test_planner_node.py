@@ -19,7 +19,7 @@ from orch.adapters.opencode import OpenCodeAdapter
 from orch.artifacts import RunDir
 from orch.cli import main
 from orch.config import Config
-from orch.errors import PlanValidationError
+from orch.errors import ModelUnavailableError, OrchError, PlanValidationError
 from orch.nodes.planner import gather_repo_facts, run_planner
 from orch.plan import load_plan
 
@@ -205,7 +205,31 @@ def test_source_document_is_read_into_prompt(tmp_path: Path, monkeypatch: pytest
     assert "SOURCE-MARKER" in captured["prompt"]
 
 
-# --- (d) gather_repo_facts --------------------------------------------------
+# --- (d) planner model error is an OrchError the CLI renders ---------------
+
+
+class _ModelDownAdapter:
+    """A stand-in adapter whose every call fails like an unusable pinned model."""
+
+    def run(self, **_kwargs):
+        raise ModelUnavailableError("pinned model 'x' is unavailable: unauthorized")
+
+
+def test_run_planner_wraps_a_model_error_as_orch_error(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    cfg = _cfg(tmp_path, repo)
+    run_dir = _run_dir(tmp_path)
+
+    with pytest.raises(OrchError, match="planner model unavailable"):
+        run_planner(
+            cfg=cfg,
+            adapter=_ModelDownAdapter(),
+            brief="b",
+            source=None,
+            run_dir=run_dir,
+        )
+
+    assert not run_dir.plan_path.exists()
 
 
 def test_gather_repo_facts_labels_and_orders_sections(tmp_path: Path):
@@ -365,3 +389,23 @@ def test_cli_plan_bad_config_exits_one(tmp_path: Path, capsys: pytest.CaptureFix
     out = capsys.readouterr().out
     assert rc == 1
     assert out.startswith("error:")
+
+
+def test_cli_plan_model_error_exits_one_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    repo = _git_repo(tmp_path)
+    cfg_file = _write_config(tmp_path, repo)
+
+    # The planner's adapter is built through the factory; force it to a model that
+    # is unavailable, which must surface as a clean error, not an uncaught raise.
+    monkeypatch.setattr(
+        "orch.adapters.factory.factory", lambda _cfg: _ModelDownAdapter()
+    )
+
+    rc = main(["plan", "b", "--config", str(cfg_file), "--run", "run-down"])
+    out = capsys.readouterr().out
+
+    assert rc == 1, out
+    assert "error:" in out
+    assert "planner model unavailable" in out
