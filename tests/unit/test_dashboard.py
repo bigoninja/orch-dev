@@ -43,7 +43,13 @@ def _payload(**over) -> dict:
                 "fix_attempts": 1,
                 "verdicts": [{"verdict": "reject"}, {"verdict": "approve"}],
             },
-            "B": {"status": "implementing", "attempts": 1, "fix_attempts": 0},
+            "B": {
+                "status": "implementing",
+                "attempts": 1,
+                "fix_attempts": 0,
+                "branch": "agent/B",
+                "commits": ["abc1234"],
+            },
         },
         "escalation": None,
         "summary": None,
@@ -69,6 +75,8 @@ def test_rows_in_plan_order_with_review_and_counts(tmp_path: Path):
     assert a["status"] == "integrated" and a["risky"] is True
     assert a["fix_attempts"] == 1 and a["review"] == "approve"  # LAST verdict wins
     assert b["status"] == "implementing" and b["review"] == ""
+    assert a["branch"] == "agent/A" and a["commits"] == 0  # defaults when absent
+    assert b["branch"] == "agent/B" and b["commits"] == 1
 
 
 def test_notes_prefer_last_error_then_violation(tmp_path: Path):
@@ -126,6 +134,8 @@ def test_http_serves_page_payload_and_404(tmp_path: Path):
             page = resp.read().decode("utf-8")
             assert resp.status == 200
             assert "orch dashboard" in page and "/api/state" in page
+            assert 'id="board"' in page
+            assert "Ready to merge" in page and "Needs you" in page
 
         with urllib.request.urlopen(base + "/api/state") as resp:
             data = json.loads(resp.read().decode("utf-8"))

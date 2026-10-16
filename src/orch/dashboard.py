@@ -4,6 +4,9 @@ Serves one local HTML page that re-fetches ``/api/state`` every few seconds. The
 data comes straight from the run's ``state.json`` — the same snapshot every
 pipeline node writes — so the page is always as fresh as the run itself.
 
+The page shows a header (run + escalation banner), the task table, and a kanban
+board: Queued → Working → In review → Needs you → Ready to merge.
+
 Strictly read-only: it never touches the graph, the lock, or the target repo.
 """
 
@@ -43,13 +46,32 @@ _PAGE = """<!doctype html>
   .pill.escalated-task { background: #da363333; color: #ff7b72; }
   #banner { display: none; margin: 14px 24px 0; padding: 10px 14px; border-radius: 8px;
             background: #da36331a; border: 1px solid #da363366; color: #ff7b72; }
-  main { padding: 16px 24px 40px; }
+  main { padding: 16px 24px 8px; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d;
            vertical-align: top; }
   th { color: #8b949e; font-weight: 600; font-size: 12px; text-transform: uppercase; }
   td.notes { color: #8b949e; max-width: 340px; }
   .risky { color: #d29922; font-weight: 600; }
+  .board-title { padding: 14px 24px 8px; color: #8b949e; font-size: 12px;
+                 text-transform: uppercase; letter-spacing: .06em;
+                 border-top: 1px solid #21262d; margin-top: 8px; }
+  .board { display: flex; gap: 14px; padding: 0 24px 24px; overflow-x: auto;
+           align-items: flex-start; }
+  .col { min-width: 250px; width: 250px; background: #161b22;
+         border: 1px solid #21262d; border-radius: 10px; padding: 10px; }
+  .col h2 { margin: 2px 4px 10px; font-size: 12px; text-transform: uppercase;
+            letter-spacing: .04em; color: #8b949e; display: flex;
+            justify-content: space-between; align-items: baseline; }
+  .col h2 .n { color: #e6edf3; font-size: 12px; }
+  .card { background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
+          padding: 10px 12px; margin-bottom: 10px; }
+  .card .t { font-weight: 600; margin-bottom: 4px; }
+  .card .repo { color: #8b949e; font-size: 12px; margin-bottom: 8px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .foot { display: flex; justify-content: space-between; gap: 8px;
+                align-items: center; color: #8b949e; font-size: 12px; margin-top: 6px; }
+  .col .empty { color: #484f58; font-size: 12px; padding: 8px 4px; }
   footer { padding: 0 24px 24px; color: #484f58; font-size: 12px; }
 </style>
 </head>
@@ -70,6 +92,8 @@ _PAGE = """<!doctype html>
     <tbody id="rows"></tbody>
   </table>
 </main>
+<div class="board-title">Board</div>
+<div id="board" class="board"></div>
 <footer><span id="updated">connecting…</span> · auto-refresh every 3s</footer>
 <script>
 function pillEl(status) {
@@ -77,6 +101,74 @@ function pillEl(status) {
   s.className = 'pill ' + (status === 'escalated' ? 'escalated-task' : status);
   s.textContent = status;
   return s;
+}
+function statusText(t) {
+  switch (t.status) {
+    case 'pending': return 'Queued';
+    case 'implementing': return 'Working';
+    case 'fixing': return 'Changes requested' + (t.fix_attempts ? ' · fix ' + t.fix_attempts : '');
+    case 'review': return 'Review pending';
+    case 'approved': return 'Approved — integrating';
+    case 'integrated': return 'Ready';
+    case 'escalated': return 'Needs you';
+    default: return t.status;
+  }
+}
+const COLUMNS = [
+  { key: 'queued',  label: 'Queued',          match: s => s === 'pending' },
+  { key: 'working', label: 'Working',         match: s => s === 'implementing' || s === 'fixing' },
+  { key: 'review',  label: 'In review',       match: s => s === 'review' },
+  { key: 'needs',   label: 'Needs you',       match: s => s === 'escalated' },
+  { key: 'ready',   label: 'Ready to merge',  match: s => s === 'approved' || s === 'integrated' },
+];
+function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function renderCard(t) {
+  const card = document.createElement('div'); card.className = 'card';
+  const title = document.createElement('div'); title.className = 't';
+  title.textContent = t.title || t.id;
+  if (t.risky) { const m = document.createElement('span');
+                 m.className = 'risky'; m.textContent = ' ⚑';
+                 m.title = 'risky (migrations/auth/payments)'; title.appendChild(m); }
+  card.appendChild(title);
+  const repo = document.createElement('div'); repo.className = 'repo';
+  repo.textContent = t.branch || ('agent/' + t.id);
+  card.appendChild(repo);
+  const foot = document.createElement('div'); foot.className = 'foot';
+  const left = document.createElement('span');
+  left.appendChild(pillEl(t.status === 'escalated' ? 'escalated' : t.status));
+  left.appendChild(document.createTextNode(' ' + statusText(t)));
+  foot.appendChild(left);
+  const right = document.createElement('span');
+  right.textContent = t.attempts
+    ? ('attempts ' + t.attempts + (t.fix_attempts ? ' / fix:' + t.fix_attempts : ''))
+    : '';
+  foot.appendChild(right);
+  card.appendChild(foot);
+  if (t.notes) {
+    const n = document.createElement('div'); n.className = 'repo';
+    n.style.marginTop = '6px'; n.textContent = truncate(t.notes, 80);
+    card.appendChild(n);
+  }
+  return card;
+}
+function renderBoard(tasks) {
+  const board = document.getElementById('board');
+  board.replaceChildren();
+  for (const col of COLUMNS) {
+    const items = tasks.filter(t => col.match(t.status));
+    const box = document.createElement('div'); box.className = 'col';
+    const h = document.createElement('h2');
+    const label = document.createElement('span'); label.textContent = col.label;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = items.length;
+    h.appendChild(label); h.appendChild(n); box.appendChild(h);
+    if (!items.length) {
+      const e = document.createElement('div'); e.className = 'empty'; e.textContent = '—';
+      box.appendChild(e);
+    } else {
+      for (const t of items) box.appendChild(renderCard(t));
+    }
+    board.appendChild(box);
+  }
 }
 async function tick() {
   let d;
@@ -122,6 +214,7 @@ async function tick() {
     add(t.notes || '—', 'notes');
     tbody.appendChild(tr);
   }
+  renderBoard(d.tasks);
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
 tick();
@@ -167,6 +260,8 @@ def build_dashboard_state(run_dir: RunDir) -> dict:
                 "review": review,
                 "risky": bool(tdef.get("risky")),
                 "notes": notes,
+                "branch": str(st.get("branch") or f"agent/{tid}"),
+                "commits": len(st.get("commits") or []),
             }
         )
 
