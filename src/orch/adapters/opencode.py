@@ -9,6 +9,11 @@ Verified against a real probe on 2026-10-16: every emitted line has the shape
 text arrives as ``{"type": "text", "part": {"type": "text", "text": "…"}}``, and
 the process exits 0 on success.
 
+``PWD`` is exported as the run's ``cwd``: ``opencode run`` resolves its project
+(where agent tools read and write) from ``$PWD``, not the process working
+directory, so a stale inherited ``PWD`` would leak a worktree run into the
+orchestrator's launch directory.
+
 Failure policy (mirrors the no-substitution law): a provider/auth signature on
 stdout+stderr raises :class:`ModelUnavailableError` — orch never retries or
 swaps the model. A wall-clock timeout kills the whole process group and returns
@@ -105,7 +110,22 @@ class OpenCodeAdapter:
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
-            env={**os.environ, **self.extra_env, **env, "NO_COLOR": "1"},
+            # PWD must track the child's real cwd: ``opencode run`` resolves the
+            # project it reads/writes from ``$PWD``, not ``getcwd()``, and
+            # ``Popen(cwd=...)`` does not update the inherited ``PWD``. Without
+            # this, a run launched for a task worktree would resolve into the
+            # orchestrator's launch directory instead of the worktree — an
+            # isolation break. Precedence is pinned low-to-high as
+            # ``os.environ`` < derived PWD < ``extra_env`` < caller ``env`` <
+            # ``NO_COLOR``, so a caller that deliberately supplies ``PWD``
+            # (e.g. tests) still wins.
+            env={
+                **os.environ,
+                "PWD": str(cwd),
+                **self.extra_env,
+                **env,
+                "NO_COLOR": "1",
+            },
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

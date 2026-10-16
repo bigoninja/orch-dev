@@ -21,14 +21,10 @@ A single shared adapter instance is used on purpose: that mirrors the real
 factory (one adapter per run, fanned out across worker threads), and the adapter
 is stateless per call.
 
-Environment note (verified during Task 18): ``opencode run`` resolves the project
-it writes into from the ``PWD`` environment variable, not ``getcwd()``. The
-adapter sets the child directory via ``Popen(cwd=...)``, which leaves the
-inherited ``PWD`` stale; inside a nested OpenCode session the two worktrees would
-therefore collapse onto the host project and the isolation assertion would be
-meaningless. A real shell exports ``PWD == getcwd()``, so each worker passes
-``env={"PWD": str(cwd)}`` to restore that invariant. The assertions are
-unchanged: files must land in their own worktree.
+Environment note: ``opencode run`` resolves the project it reads/writes from the
+``PWD`` environment variable, not ``getcwd()``. ``OpenCodeAdapter`` exports
+``PWD == cwd`` (see :meth:`OpenCodeAdapter.run`), so each worker passes
+``env={}`` and the two worktrees stay distinct without any test-side workaround.
 """
 
 import os
@@ -97,7 +93,7 @@ def test_two_concurrent_sessions_stay_isolated(tmp_path: Path, record_property) 
             cwd=cwd,
             session_id=None,
             title=f"smoke/{name.upper()}/implement",
-            env={"PWD": str(cwd)},
+            env={},
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:

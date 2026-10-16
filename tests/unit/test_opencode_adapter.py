@@ -27,6 +27,7 @@ def _shim_bin(tmp_path: Path, mode: str) -> str:
         "import json, os, sys, time\n"
         "args = sys.argv[1:]\n"
         "open(os.environ['SHIM_ARGS_FILE'], 'a').write(json.dumps(args) + '\\n')\n"
+        "open(os.environ['SHIM_PWD_FILE'], 'w').write(os.environ.get('PWD', ''))\n"
         "mode = os.environ.get('SHIM_MODE', 'ok')\n"
         "if mode == 'sleep':\n    time.sleep(30)\n"
         "if mode == 'model-error':\n    sys.stderr.write('model not found: nope/nope\\n'); sys.exit(1)\n"
@@ -36,27 +37,44 @@ def _shim_bin(tmp_path: Path, mode: str) -> str:
     return str(bin_dir)
 
 
-def _run_with_shim(tmp_path, monkeypatch, mode, *, session_id=None, timeout_s=10):
+def _run_with_shim(tmp_path, monkeypatch, mode, *, session_id=None, timeout_s=10, env=None):
     args_file = tmp_path / "args.jsonl"
+    pwd_file = tmp_path / "pwd.txt"
     monkeypatch.setenv("PATH", _shim_bin(tmp_path, mode) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("SHIM_ARGS_FILE", str(args_file))
+    monkeypatch.setenv("SHIM_PWD_FILE", str(pwd_file))
     monkeypatch.setenv("SHIM_MODE", mode)
     adapter = OpenCodeAdapter(model="opencode-go/deepseek-v4.1-flash", timeout_s=timeout_s, extra_env={})
     r = adapter.run(role="implement", prompt="hello", cwd=tmp_path, session_id=session_id,
-                    title="r/T1/implement", env={})
-    return r, [json.loads(l) for l in args_file.read_text().splitlines()]
+                    title="r/T1/implement", env=env or {})
+    return r, [json.loads(l) for l in args_file.read_text().splitlines()], pwd_file.read_text()
 
 
 def test_success_run_and_argv(tmp_path, monkeypatch):
-    r, argv_calls = _run_with_shim(tmp_path, monkeypatch, "ok")
+    r, argv_calls, _ = _run_with_shim(tmp_path, monkeypatch, "ok")
     assert r.exit_code == 0 and r.session_id == "ses_shim" and r.text == "ok"
     argv = argv_calls[0]
     assert argv[:3] == ["run", "--format", "json"] and "--auto" in argv
     assert argv[argv.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash"
 
 
+def test_pwd_env_tracks_cwd_so_the_project_resolves_to_the_worktree(tmp_path, monkeypatch):
+    # opencode resolves its project (where tools read/write) from $PWD, not the
+    # process cwd; a stale inherited PWD would send a worktree run to the host
+    # project. Force a wrong PWD and require the adapter to override it with cwd.
+    monkeypatch.setenv("PWD", "/nonexistent/stale-pwd")
+    _, _, pwd = _run_with_shim(tmp_path, monkeypatch, "ok")
+    assert pwd == str(tmp_path)
+
+
+def test_caller_env_pwd_wins_over_the_derived_one(tmp_path, monkeypatch):
+    # Precedence pin: an explicit caller-supplied PWD is honored.
+    _, _, pwd = _run_with_shim(tmp_path, monkeypatch, "ok", env={"PWD": "/explicit/pwd"})
+    assert pwd == "/explicit/pwd"
+
+
 def test_session_flag_passed(tmp_path, monkeypatch):
-    _, argv_calls = _run_with_shim(tmp_path, monkeypatch, "ok", session_id="ses_x")
+    _, argv_calls, _ = _run_with_shim(tmp_path, monkeypatch, "ok", session_id="ses_x")
     assert argv_calls[0][argv_calls[0].index("--session") + 1] == "ses_x"
 
 
@@ -67,5 +85,5 @@ def test_model_unavailable_raises(tmp_path, monkeypatch):
 
 def test_timeout_kills_process_group(tmp_path, monkeypatch):
     t0 = time.monotonic()
-    r, _ = _run_with_shim(tmp_path, monkeypatch, "sleep", timeout_s=1)
+    r, _, _ = _run_with_shim(tmp_path, monkeypatch, "sleep", timeout_s=1)
     assert r.timed_out is True and time.monotonic() - t0 < 5

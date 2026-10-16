@@ -17,15 +17,10 @@ What it proves, and why each assertion is here:
 * ``gitops.commit_all`` returns a sha — the agent's write is uncommitted, so the
   integrator's stage-and-commit path has something to commit.
 
-Environment note (verified during Task 18): ``opencode run`` resolves the project
-it writes into from the ``PWD`` environment variable, not from ``getcwd()``. Our
-adapter sets the child's directory with ``Popen(cwd=...)``, which does **not**
-update the inherited ``PWD``; under a nested OpenCode session (as in this
-harness) ``os.environ['PWD']`` is the host project, so the model's write lands
-outside the worktree unless ``PWD`` is corrected. A plain shell always exports
-``PWD == getcwd()``, so we pass ``env={"PWD": str(repo)}`` to reproduce the
-environment a worktree run is supposed to have. This does not weaken any
-assertion — the file must still appear in ``cwd``.
+Environment note: ``opencode run`` resolves the project it reads/writes from the
+``PWD`` environment variable, not ``getcwd()``. ``OpenCodeAdapter`` now exports
+``PWD == cwd`` (see :meth:`OpenCodeAdapter.run`), so this test passes ``env={}``
+and still requires the file to land in the worktree ``cwd``.
 """
 
 import os
@@ -73,7 +68,7 @@ def test_real_adapter_writes_file_and_commits(tmp_path: Path, record_property) -
         cwd=repo,
         session_id=None,
         title="smoke/SMOKE/implement",
-        env={"PWD": str(repo)},
+        env={},
     )
 
     assert result.session_id is not None
