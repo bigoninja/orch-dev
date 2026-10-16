@@ -1,0 +1,22 @@
+# orch configuration — see docs/superpowers/specs/2026-10-16-agent-dev-orchestrator-design.md
+target_repo: /path/to/target-repo
+base_ref: main
+integration_branch: orch/integration
+worktree_root: .worktrees
+model: opencode-go/deepseek-v4.1-flash
+concurrency: 3
+retries: 2
+timeout_minutes: 45
+env_passthrough: []
+risky_patterns:
+- db/migrations/**
+- '**/auth/**'
+- '**/payments/**'
+- '**/gateway/**'
+- .github/**
+- '**/package.json'
+- '**/package-lock.json'
+- '**/*.env*'
+notify: none
+state_dir: state
+runs_dir: runs
