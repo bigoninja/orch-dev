@@ -64,10 +64,10 @@ def _task(tid: str, *, file: str, depends_on: tuple[str, ...] = ()) -> dict:
     }
 
 
-def _boot(tmp_path: Path, tasks: list[dict], scenario: dict, *, rid="R1", retries=2):
+def _boot(tmp_path: Path, tasks: list[dict], scenario: dict, *, rid="R1", retries=2, concurrency=3):
     """Build a graph over a fresh demo repo with the given plan and scenario."""
     repo = make_demo_repo(tmp_path / "demo")
-    cfg = make_config(repo, tmp_path, retries=retries)
+    cfg = make_config(repo, tmp_path, retries=retries, concurrency=concurrency)
     run_dir = RunDir.create(Path(cfg.runs_dir), rid)
     write_plan(run_dir, tasks, rid=rid)
     scenario_path = tmp_path / "scenario.yaml"
@@ -169,6 +169,36 @@ def test_a_merge_conflict_spawns_one_repair_that_resolves_the_parent(tmp_path, m
     assert final.get("escalation") is None
     integration = cfg.target_repo / cfg.worktree_root / "orch-integration"
     assert "OK" in (integration / "b.txt").read_text(encoding="utf-8")
+
+
+def test_a_repair_completes_at_concurrency_one(tmp_path, monkeypatch):
+    """The parked parent must not hold the only slot: at concurrency=1 the repair runs.
+
+    Without the parked-parent exemption the Approved parent keeps the sole slot, the
+    dispatch comes back empty-but-in-flight, and the run truncates silently: neither
+    task integrates, no escalation is raised, and ``report`` (the summary) never runs.
+    """
+    scenario = {
+        "B": {
+            "implement": [{"edits": [{"file": "b.txt", "content": "OK"}]}],
+            "review": [{"verdict": "approve"}],
+        },
+        "B-repair": {
+            "implement": [{"edits": [{"file": "b.txt", "content": "OK"}]}],
+            "review": [{"verdict": "approve"}],
+        },
+    }
+    cfg, run_dir, graph, _adapter = _boot(
+        tmp_path, [_task("B", file="b.txt")], scenario, concurrency=1
+    )
+    _conflict_once_for("agent/B", monkeypatch)
+
+    final = _approve_and_run(graph, run_dir)
+
+    assert final["task_state"]["B"]["status"] == TStatus.INTEGRATED, "parent resolved"
+    assert final["task_state"]["B-repair"]["status"] == TStatus.INTEGRATED, "repair merged"
+    assert final.get("escalation") is None
+    assert final.get("summary") == "run R1: 2/2 integrated", "report must run, not truncate"
 
 
 # --- 2. one repair per failure event / no nested repairs ----------------------

@@ -13,6 +13,14 @@ the parent is still APPROVED (in flight, claiming those files) when the repair i
 spawned — so without the exemption the parent would defer its own repair forever.
 Every other in-flight claim still defers it.
 
+A parent with a **live repair child** is *parked*: its outstanding work has
+moved to the repair, so it is excluded from ``in_flight`` altogether — neither
+its concurrency slot nor its files are held. Without this, at ``concurrency=1``
+the Approved parent would keep the only slot while its Pending repair waited, the
+dispatch would come back empty-but-in-flight, and the run would complete with
+nothing integrated and no escalation. A repair child that is terminal
+(Integrated or Escalated) does not park its parent.
+
 The returned `state` is what the graph routes on:
 
 * ``"escalated"`` — some task escalated; nothing is dispatched, the run stops.
@@ -38,6 +46,12 @@ from orch.state import TStatus
 
 _IN_FLIGHT = frozenset(
     {TStatus.IMPLEMENTING, TStatus.REVIEW, TStatus.FIXING, TStatus.APPROVED}
+)
+
+#: Repair statuses that park their parent: a spawned repair that is not finished.
+#: ``INTEGRATED``/``ESCALATED`` are terminal and leave the parent on its own.
+_LIVE_REPAIR = frozenset(
+    {TStatus.PENDING, TStatus.IMPLEMENTING, TStatus.REVIEW, TStatus.FIXING}
 )
 
 
@@ -98,6 +112,29 @@ def _repair_parent(task_state: dict, tid: str) -> str | None:
     return None
 
 
+def _parked_parents(statuses: dict[str, TStatus], task_state: dict[str, dict]) -> set[str]:
+    """Approved tasks that a live repair child is already working on.
+
+    Their outstanding work has moved to the repair, so they hold neither a
+    concurrency slot nor their files. A terminal repair child (Integrated or
+    Escalated) does not park its parent.
+    """
+    live_parents: set[str] = set()
+    for record in task_state.values():
+        record = record or {}
+        if record.get("origin") != "repair":
+            continue
+        if _status(record.get("status", TStatus.PENDING)) not in _LIVE_REPAIR:
+            continue
+        parent = record.get("parent")
+        if parent is not None:
+            live_parents.add(parent)
+    return {
+        tid for tid, status in statuses.items()
+        if status is TStatus.APPROVED and tid in live_parents
+    }
+
+
 def compute_dispatch(
     *, tasks: dict[str, dict], task_state: dict[str, dict], concurrency: int
 ) -> DispatchDecision:
@@ -117,7 +154,10 @@ def compute_dispatch(
     if all(status is TStatus.INTEGRATED for status in statuses.values()):
         return DispatchDecision([], "done")
 
-    in_flight = [tid for tid in tasks if statuses[tid] in _IN_FLIGHT]
+    parked = _parked_parents(statuses, task_state)
+    in_flight = [
+        tid for tid in tasks if statuses[tid] in _IN_FLIGHT and tid not in parked
+    ]
     claimed: list[tuple[str, list[str]]] = [
         (tid, list(tasks[tid].get("files_allowed", []))) for tid in in_flight
     ]

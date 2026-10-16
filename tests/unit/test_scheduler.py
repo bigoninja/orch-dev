@@ -270,6 +270,50 @@ def test_a_plan_task_still_defers_to_an_overlapping_in_flight_task():
     assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision([], "ok")
 
 
+# --- Parked parents (a live repair frees the slot) ---------------------------
+
+
+def test_a_parked_parent_does_not_hold_the_only_slot():
+    """An Approved parent with a live repair child frees its concurrency slot.
+
+    Otherwise, at ``concurrency=1`` the parent would hold the only slot while its
+    own repair sits Pending, the dispatch comes back empty-but-in-flight, and the
+    run completes with nothing integrated and no escalation (silent truncation).
+    """
+    tasks = {
+        "B": task("B", files=("src/b.py",)),
+        "B-repair": task("B-repair", files=("src/b.py",)),
+    }
+    state = {
+        "B": {"status": TStatus.APPROVED},
+        "B-repair": {"status": TStatus.PENDING, "origin": "repair", "parent": "B"},
+    }
+
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=1) == DispatchDecision(
+        ["B-repair"], "ok"
+    )
+
+
+@pytest.mark.parametrize("terminal", [TStatus.INTEGRATED, TStatus.ESCALATED])
+def test_a_parent_whose_repair_child_is_terminal_is_not_parked(terminal):
+    """A terminal repair does not park its parent: the parent still counts as before."""
+    tasks = {
+        "B": task("B", files=("src/b.py",)),
+        "B-repair": task("B-repair", files=("src/b.py",)),
+        "C": task("C", files=("src/c.py",)),
+    }
+    state = {
+        "B": {"status": TStatus.APPROVED},
+        "B-repair": {"status": terminal, "origin": "repair", "parent": "B"},
+        "C": {"status": TStatus.PENDING},
+    }
+
+    # An Escalated child still stops the run first (escalation precedence);
+    # an Integrated child leaves the Approved parent holding the only slot.
+    expected = DispatchDecision([], "escalated" if terminal is TStatus.ESCALATED else "ok")
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=1) == expected
+
+
 # --- Terminal states --------------------------------------------------------
 
 
