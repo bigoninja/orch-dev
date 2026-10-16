@@ -1,2 +1,8 @@
 .worktrees/
 .superpowers/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+state/
+runs/
