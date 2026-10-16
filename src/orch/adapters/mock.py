@@ -43,7 +43,7 @@ The ``planner`` role has its **own** top-level scenario bucket (a list of
 per run before any task exists::
 
     planner:
-      - {text: "```yaml\\nrun_id: r\\n...\\n```"}
+      - {text: "```json\\n{\\"run_id\\": \\"r\\", ...}\\n```"}
 
 Its title is ``<run-id>/planner``; the reply text is returned verbatim for the
 planner node to parse.

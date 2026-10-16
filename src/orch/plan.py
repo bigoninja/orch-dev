@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path, PurePosixPath
 
@@ -8,7 +9,12 @@ from orch.errors import PlanValidationError
 
 # Check keys are descriptive and free-form (e.g. "typecheck", "migrate-0022"); uniqueness per task is enforced by the dict itself.
 
-_FENCED_YAML_RE = re.compile(r"```yaml[^\n]*\n(.*?)```", re.DOTALL)
+#: The planner emits one fenced ```json block, mirroring the reviewer verdict
+#: contract. JSON needs no block scalars and has no quote-escaping rules, so a shell
+#: command containing quotes cannot corrupt the parse — a YAML plan did exactly
+#: that, and run 20261016-163406 was refused for it. ``plan.yaml`` stays YAML on
+#: disk because orch writes that file itself.
+_FENCED_JSON_RE = re.compile(r"```json[^\n]*\n(.*?)```", re.DOTALL)
 
 # (task_id | None, code, message)
 Issue = tuple[str | None, str, str]
@@ -123,30 +129,26 @@ def load_plan(path: Path) -> Plan:
 
 
 def parse_planner_output(text: str) -> Plan:
-    """Extract the last fenced ```yaml block containing ``run_id:`` and validate its shape.
+    """Extract the last fenced ```json block containing ``run_id`` and validate its shape.
 
     Deliberately does NOT call ``validate_plan``: semantic validation (duplicate ids,
     unknown deps, cycles, check keys) stays a separate step so that a structurally
     valid but semantically flawed plan can still be written to ``plan.invalid.yaml``.
     """
-    blocks = _FENCED_YAML_RE.findall(text)
+    blocks = _FENCED_JSON_RE.findall(text)
     if not blocks:
-        raise PlanValidationError(["planner output contains no ```yaml block"])
+        raise PlanValidationError(["planner output contains no ```json block"])
 
     candidates: list[object] = []
-    last_yaml_error: str | None = None
     for block in blocks:
         try:
-            loaded = yaml.safe_load(block)
-        except yaml.YAMLError as e:
-            last_yaml_error = f"planner yaml block is not valid yaml: {e}"
+            loaded = json.loads(block)
+        except json.JSONDecodeError:
             continue
         if isinstance(loaded, dict) and "run_id" in loaded:
             candidates.append(loaded)
     if not candidates:
-        if last_yaml_error is not None:
-            raise PlanValidationError([last_yaml_error])
-        raise PlanValidationError(["planner output has no ```yaml block containing run_id"])
+        raise PlanValidationError(["planner output has no ```json block containing run_id"])
 
     try:
         return Plan.model_validate(candidates[-1])

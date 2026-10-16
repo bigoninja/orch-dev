@@ -41,6 +41,10 @@ def _shim_bin(tmp_path: Path, mode: str) -> str:
         "    print(json.dumps({'type':'error','timestamp':1,'sessionID':'ses_shim',"
         "'error':{'type':'provider.no-route','message':'Model unavailable: opencode/definitely-not-a-real-model'}}))\n"
         "    sys.exit(1)\n"
+        "if mode == 'stdout-quota-error':\n"
+        "    print(json.dumps({'type':'error','timestamp':1,'sessionID':'ses_shim',"
+        "'error':{'type':'provider.quota','message':'Upstream request failed: Insufficient account funds','status':402}}))\n"
+        "    sys.exit(1)\n"
         "if mode == 'stdout-transcript-unauthorized':\n"
         "    print(json.dumps({'type':'text','timestamp':1,'sessionID':'ses_shim',"
         "'part':{'type':'text','text':\"leaked 'unauthorized' and 'Invalid API key.' from authz.ts\"}}))\n"
@@ -119,6 +123,15 @@ def test_stdout_error_event_is_a_model_error(tmp_path, monkeypatch):
     # stdout ("provider.no-route" / "Model unavailable: …"), empty stderr, exit 1.
     with pytest.raises(ModelUnavailableError, match="Model unavailable"):
         _run_with_shim(tmp_path, monkeypatch, "stdout-error-event")
+
+
+def test_stdout_quota_error_is_a_model_error(tmp_path, monkeypatch):
+    # A payment/quota failure arrives as a stdout error event (status 402), NOT on
+    # stderr. It must escalate as model_unavailable rather than return an empty
+    # reply — otherwise the planner writes a 0-byte plan.invalid.yaml and reports
+    # "no json block" instead of the real cause (pilot finding 2026-10-16).
+    with pytest.raises(ModelUnavailableError, match="Insufficient account funds"):
+        _run_with_shim(tmp_path, monkeypatch, "stdout-quota-error")
 
 
 def test_stdout_transcript_unauthorized_is_not_a_model_error(tmp_path, monkeypatch):

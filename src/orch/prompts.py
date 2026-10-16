@@ -15,22 +15,31 @@ VERDICT_JSON_SPEC = (
     '"findings":[{"severity":"blocker|major|minor","file":"","note":""}],"summary":""}.'
 )
 
-# The plan schema the planner must emit, shown as an example fenced yaml block.
-PLAN_SCHEMA_SPEC = """\
-```yaml
-run_id: <string>
-brief: <string>
-source: <string or null>
-tasks:
-  - id: <string>
-    title: <string>
-    description: <string>
-    depends_on: [<task id>, ...]
-    files_allowed: [<path or glob>, ...]
-    acceptance_criteria: [<string>, ...]
-    checks:
-      <check key>: {cmd: <shell command>, cwd: <optional relative directory>}
-    risky: <true or false>
+# The plan contract, emitted as JSON — the same choice the reviewer verdict already
+# makes (VERDICT_JSON_SPEC). JSON has no block scalars and no quote-escaping rules,
+# so a shell command containing quotes cannot corrupt the parse; a YAML plan did
+# exactly that, and run 20261016-163406 was refused for it.
+PLAN_JSON_SPEC = """\
+```json
+{
+  "run_id": "<string>",
+  "brief": "<string>",
+  "source": "<string or null>",
+  "tasks": [
+    {
+      "id": "<string>",
+      "title": "<string>",
+      "description": "<string>",
+      "depends_on": ["<task id>", "..."],
+      "files_allowed": ["<path or glob>", "..."],
+      "acceptance_criteria": ["<string>", "..."],
+      "checks": {
+        "<check key>": {"cmd": "<shell command>", "cwd": "<optional relative directory>"}
+      },
+      "risky": false
+    }
+  ]
+}
 ```"""
 
 TASK_PROMPT_TEMPLATE = """\
@@ -128,9 +137,11 @@ You are the planner for an automated development pipeline.
 
 ## Output format
 
-Reply with exactly one fenced ```yaml block and nothing else. Its contents must validate as this schema:
+Reply with exactly one fenced ```json block and nothing else. It must validate against this schema:
 
 {schema}
+
+Shell commands go verbatim in the JSON string: escape only `"` and `\\`. A single quote inside a command needs no escaping.
 
 Choose the checks from real commands that exist in the repository; prefer the scripts from package.json shown in the repository facts above over inventing commands.
 """
@@ -203,5 +214,5 @@ def build_planner_prompt(*, brief: str, source_text: str | None, repo_facts: str
         brief=brief,
         source=source_text if source_text is not None else "(none)",
         repo_facts=repo_facts,
-        schema=PLAN_SCHEMA_SPEC,
+        schema=PLAN_JSON_SPEC,
     )

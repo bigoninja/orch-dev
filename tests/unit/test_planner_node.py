@@ -76,50 +76,51 @@ def _mock_planner(tmp_path: Path, text: str) -> MockAdapter:
 
 
 def _fence(body: str) -> str:
-    return "```yaml\n" + body.strip() + "\n```\n"
+    return "```json\n" + body.strip() + "\n```\n"
 
 
 VALID_PLAN = _fence(
     """
-run_id: run-pr
-brief: test brief
-source: null
-tasks:
-  - id: T1
-    title: Add health endpoint
-    description: Add GET /healthz returning 200.
-    depends_on: []
-    files_allowed:
-      - db/migrations/0001_init.sql
-    acceptance_criteria:
-      - GET /healthz returns 200
-    checks:
-      test: {cmd: "pytest -q"}
+{
+  "run_id": "run-pr",
+  "brief": "test brief",
+  "source": null,
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Add health endpoint",
+      "description": "Add GET /healthz returning 200.",
+      "depends_on": [],
+      "files_allowed": ["db/migrations/0001_init.sql"],
+      "acceptance_criteria": ["GET /healthz returns 200"],
+      "checks": {"test": {"cmd": "pytest -q"}}
+    }
+  ]
+}
 """
 )
 
 CYCLE_PLAN = _fence(
     """
-run_id: run-cyc
-brief: test brief
-source: null
-tasks:
-  - id: A
-    title: A
-    description: first
-    depends_on: [B]
-    files_allowed: [a.py]
-    acceptance_criteria: [x]
-    checks:
-      test: {cmd: "true"}
-  - id: B
-    title: B
-    description: second
-    depends_on: [A]
-    files_allowed: [b.py]
-    acceptance_criteria: [x]
-    checks:
-      test: {cmd: "true"}
+{
+  "run_id": "run-cyc",
+  "brief": "test brief",
+  "source": null,
+  "tasks": [
+    {
+      "id": "A", "title": "A", "description": "first",
+      "depends_on": ["B"], "files_allowed": ["a.py"],
+      "acceptance_criteria": ["x"],
+      "checks": {"test": {"cmd": "true"}}
+    },
+    {
+      "id": "B", "title": "B", "description": "second",
+      "depends_on": ["A"], "files_allowed": ["b.py"],
+      "acceptance_criteria": ["x"],
+      "checks": {"test": {"cmd": "true"}}
+    }
+  ]
+}
 """
 )
 

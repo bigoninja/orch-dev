@@ -157,23 +157,31 @@ EXPECTED_PLANNER_PROMPT = "\n".join([
     "",
     "## Output format",
     "",
-    "Reply with exactly one fenced ```yaml block and nothing else. Its contents must validate as this schema:",
+    "Reply with exactly one fenced ```json block and nothing else. It must validate against this schema:",
     "",
-    "```yaml",
-    "run_id: <string>",
-    "brief: <string>",
-    "source: <string or null>",
-    "tasks:",
-    "  - id: <string>",
-    "    title: <string>",
-    "    description: <string>",
-    "    depends_on: [<task id>, ...]",
-    "    files_allowed: [<path or glob>, ...]",
-    "    acceptance_criteria: [<string>, ...]",
-    "    checks:",
-    "      <check key>: {cmd: <shell command>, cwd: <optional relative directory>}",
-    "    risky: <true or false>",
+    "```json",
+    "{",
+    "  \"run_id\": \"<string>\",",
+    "  \"brief\": \"<string>\",",
+    "  \"source\": \"<string or null>\",",
+    "  \"tasks\": [",
+    "    {",
+    "      \"id\": \"<string>\",",
+    "      \"title\": \"<string>\",",
+    "      \"description\": \"<string>\",",
+    "      \"depends_on\": [\"<task id>\", \"...\"],",
+    "      \"files_allowed\": [\"<path or glob>\", \"...\"],",
+    "      \"acceptance_criteria\": [\"<string>\", \"...\"],",
+    "      \"checks\": {",
+    "        \"<check key>\": {\"cmd\": \"<shell command>\", \"cwd\": \"<optional relative directory>\"}",
+    "      },",
+    "      \"risky\": false",
+    "    }",
+    "  ]",
+    "}",
     "```",
+    "",
+    "Shell commands go verbatim in the JSON string: escape only `\"` and `\\`. A single quote inside a command needs no escaping.",
     "",
     "Choose the checks from real commands that exist in the repository; prefer the scripts from package.json shown in the repository facts above over inventing commands.",
 ]) + "\n"
@@ -261,22 +269,22 @@ def test_review_prompt_handles_no_evidence_files() -> None:
     assert "Evidence files:\n- (none)" in rendered
 
 
-def test_planner_prompt_demands_one_yaml_block_with_schema_fields() -> None:
+def test_planner_prompt_demands_one_json_block_with_schema_fields() -> None:
     rendered = build_planner_prompt(brief=BRIEF, source_text=None, repo_facts=REPO_FACTS)
-    assert "exactly one fenced ```yaml block" in rendered
+    assert "exactly one fenced ```json block" in rendered
     for field in (
-        "run_id:",
-        "brief:",
-        "source:",
-        "tasks:",
-        "id:",
-        "title:",
-        "description:",
-        "depends_on:",
-        "files_allowed:",
-        "acceptance_criteria:",
-        "checks:",
-        "risky:",
+        '"run_id":',
+        '"brief":',
+        '"source":',
+        '"tasks":',
+        '"id":',
+        '"title":',
+        '"description":',
+        '"depends_on":',
+        '"files_allowed":',
+        '"acceptance_criteria":',
+        '"checks":',
+        '"risky":',
     ):
         assert field in rendered
     assert "## Source document\n\n(none)" in rendered
@@ -285,55 +293,51 @@ def test_planner_prompt_demands_one_yaml_block_with_schema_fields() -> None:
 
 # --- parse_planner_output -----------------------------------------------------
 
-VALID_PLAN_YAML = """\
-run_id: 20261016-120000
-brief: Add GitHub OAuth login.
-source: null
-tasks:
-  - id: T1
-    title: Add auth module
-    description: Add the GitHub OAuth client.
-    depends_on: []
-    files_allowed:
-      - src/auth.py
-    acceptance_criteria:
-      - auth module exists
-    checks:
-      test:
-        cmd: pytest -q tests/test_auth.py
-    risky: false
+VALID_PLAN_JSON = """\
+{
+  "run_id": "20261016-120000",
+  "brief": "Add GitHub OAuth login.",
+  "source": null,
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Add auth module",
+      "description": "Add the GitHub OAuth client.",
+      "depends_on": [],
+      "files_allowed": ["src/auth.py"],
+      "acceptance_criteria": ["auth module exists"],
+      "checks": {"test": {"cmd": "pytest -q tests/test_auth.py"}},
+      "risky": false
+    }
+  ]
+}
 """
 
-CYCLE_PLAN_YAML = """\
-run_id: 20261016-120000
-brief: Cycle fixture.
-source: null
-tasks:
-  - id: T1
-    title: One
-    description: One.
-    depends_on: [T2]
-    files_allowed: [src/one.py]
-    acceptance_criteria: [one exists]
-    checks:
-      test:
-        cmd: "true"
-    risky: false
-  - id: T2
-    title: Two
-    description: Two.
-    depends_on: [T1]
-    files_allowed: [src/two.py]
-    acceptance_criteria: [two exists]
-    checks:
-      test:
-        cmd: "true"
-    risky: false
+CYCLE_PLAN_JSON = """\
+{
+  "run_id": "20261016-120000",
+  "brief": "Cycle fixture.",
+  "source": null,
+  "tasks": [
+    {
+      "id": "T1", "title": "One", "description": "One.",
+      "depends_on": ["T2"], "files_allowed": ["src/one.py"],
+      "acceptance_criteria": ["one exists"],
+      "checks": {"test": {"cmd": "true"}}, "risky": false
+    },
+    {
+      "id": "T2", "title": "Two", "description": "Two.",
+      "depends_on": ["T1"], "files_allowed": ["src/two.py"],
+      "acceptance_criteria": ["two exists"],
+      "checks": {"test": {"cmd": "true"}}, "risky": false
+    }
+  ]
+}
 """
 
 
 def test_parse_planner_output_with_chatter_around_block() -> None:
-    text = f"Sure, here is the plan:\n\n```yaml\n{VALID_PLAN_YAML}```\n\nWant changes?\n"
+    text = f"Sure, here is the plan:\n\n```json\n{VALID_PLAN_JSON}```\n\nWant changes?\n"
     plan = parse_planner_output(text)
     assert plan.run_id == "20261016-120000"
     assert plan.brief == "Add GitHub OAuth login."
@@ -343,8 +347,8 @@ def test_parse_planner_output_with_chatter_around_block() -> None:
 
 
 def test_parse_planner_output_takes_last_run_id_block() -> None:
-    first = VALID_PLAN_YAML.replace("20261016-120000", "old-run")
-    text = f"```yaml\n{first}```\nstale, ignore that one\n```yaml\n{VALID_PLAN_YAML}```\n"
+    first = VALID_PLAN_JSON.replace("20261016-120000", "old-run")
+    text = f"```json\n{first}```\nstale, ignore that one\n```json\n{VALID_PLAN_JSON}```\n"
     assert parse_planner_output(text).run_id == "20261016-120000"
 
 
@@ -355,22 +359,69 @@ def test_parse_planner_output_without_block_raises() -> None:
 
 def test_parse_planner_output_without_run_id_raises() -> None:
     with pytest.raises(PlanValidationError):
-        parse_planner_output("```yaml\nfoo: bar\n```\n")
+        parse_planner_output('```json\n{"foo": "bar"}\n```\n')
 
 
-def test_parse_planner_output_invalid_yaml_raises() -> None:
+def test_parse_planner_output_unparseable_json_raises() -> None:
     with pytest.raises(PlanValidationError):
-        parse_planner_output("```yaml\nrun_id: [unclosed\n```\n")
+        parse_planner_output('```json\n{"run_id": [unclosed}\n```\n')
 
 
 def test_parse_planner_output_invalid_schema_raises() -> None:
     with pytest.raises(PlanValidationError):
-        parse_planner_output("```yaml\nrun_id: r1\nbrief: b\n```\n")
+        parse_planner_output('```json\n{"run_id": "r1", "brief": "b"}\n```\n')
 
 
 def test_parse_planner_output_does_not_validate() -> None:
     """Validation is a separate step: a cyclic plan parses, validate_plan flags it."""
-    plan = parse_planner_output(f"```yaml\n{CYCLE_PLAN_YAML}```\n")
+    plan = parse_planner_output(f"```json\n{CYCLE_PLAN_JSON}```\n")
     assert [t.id for t in plan.tasks] == ["T1", "T2"]
     issues = validate_plan(plan, [])
     assert any(code == "cycle" for _, code, _ in issues)
+
+
+# --- regression: quoted shell commands must not refuse the plan ----------------
+
+#: The verbatim command that refused run 20261016-163406 as an unparseable YAML
+#: plan. As JSON it is just a string with escaped double quotes — no block scalars,
+#: no quote-escaping rules.
+SHELL_QUOTED_CMD_PLAN = """\
+```json
+{
+  "run_id": "r1",
+  "brief": "b",
+  "source": null,
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "t",
+      "description": "d",
+      "depends_on": [],
+      "files_allowed": ["web/**"],
+      "acceptance_criteria": ["a"],
+      "checks": {
+        "no-platform-display-id": {
+          "cmd": "! grep -q \\"actor.id === 'key:platform'\\" src/lib/authz.ts",
+          "cwd": "web"
+        }
+      },
+      "risky": false
+    }
+  ]
+}
+```"""
+
+
+def test_parse_planner_output_accepts_a_quoted_shell_command() -> None:
+    """A quoted check command must survive intact — the defect that refused a real run."""
+    plan = parse_planner_output(SHELL_QUOTED_CMD_PLAN)
+    check = plan.tasks[0].checks["no-platform-display-id"]
+    assert check.cmd == """! grep -q "actor.id === 'key:platform'" src/lib/authz.ts"""
+    assert check.cwd == "web"
+
+
+def test_planner_prompt_requires_json_and_states_the_escaping_rule() -> None:
+    """The contract must be JSON, and it must say how to escape a command's quotes."""
+    rendered = build_planner_prompt(brief=BRIEF, source_text=None, repo_facts=REPO_FACTS)
+    assert "fenced ```json block" in rendered
+    assert "single quote inside a command needs no escaping" in rendered

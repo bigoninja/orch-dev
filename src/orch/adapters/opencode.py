@@ -51,8 +51,15 @@ MODEL_UNAVAILABLE_RE = re.compile(rf"(?i){_WORD_SIGNATURES}")
 #: directly — probed against a bogus model id: ``{"type":"error","error":
 #: {"type":"provider.no-route","message":"Model unavailable: <id>"}}``. The word
 #: "unavailable" is trusted *only* here: on stderr it is too generic, and in the
-#: transcript it would be prose.
-MODEL_UNAVAILABLE_ERROR_RE = re.compile(rf"(?i)unavailable|{_WORD_SIGNATURES}")
+#: transcript it would be prose. Payment/quota failures are the same class —
+#: probed 2026-10-16 against a funded-out account: ``{"type":"provider.quota",
+#: "message":"Upstream request failed: Insufficient account funds","status":402}``
+#: — and likewise arrive only as an error event, so the bare ``402`` is trusted
+#: here even though it is never trusted on the transcript.
+MODEL_UNAVAILABLE_ERROR_RE = re.compile(
+    rf"(?i)unavailable|quota|insufficient\s+(account\s+)?funds|payment\s+required"
+    rf"|\b402\b|{_WORD_SIGNATURES}"
+)
 
 #: Bare numeric provider codes, matched on **stderr only**. An agent's own
 #: transcript (stdout) can contain a number like 401 in prose ("HTTP 401
