@@ -51,17 +51,20 @@ def test_init_refuses_non_git_dir(tmp_path: Path):
         init_config(plain, tmp_path / "orch.config.yaml")
 
 
-def test_pilot_config_loads():
-    root = Path(__file__).resolve().parents[2]
-    cfg = load_config(root / "pilots" / "shopdash-phase-1b.yaml")
-    assert cfg.target_repo == Path("/home/yuvi/shopdash/shopdash")
-    assert cfg.base_ref == "security/hardening-phase-1"
-    assert cfg.integration_branch == "security/hardening-phase-1b"
-    assert cfg.env_passthrough == [
-        "MIGRATION_DATABASE_URL",
-        "DATABASE_URL",
-        "PRODUCTION_DATABASE_HOST",
-    ]
+def test_override_config_loads(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    cfg_file = tmp_path / "orch.config.yaml"
+    cfg_file.write_text(
+        f"target_repo: {repo}\n"
+        "base_ref: release/1\n"
+        "integration_branch: orch/release-1\n"
+        "env_passthrough:\n- A\n- B\n"
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.target_repo == repo
+    assert cfg.base_ref == "release/1"
+    assert cfg.integration_branch == "orch/release-1"
+    assert cfg.env_passthrough == ["A", "B"]
     # everything else inherits the config defaults
     assert cfg.model == "opencode/deepseek-v4.1-flash-free"
     assert cfg.concurrency == 3

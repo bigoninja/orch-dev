@@ -1,4 +1,4 @@
-# orch configuration — see docs/superpowers/specs/2026-10-16-agent-dev-orchestrator-design.md
+# orch configuration — see README.md
 target_repo: /path/to/target-repo
 base_ref: main
 integration_branch: orch/integration

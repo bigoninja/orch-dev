@@ -11,7 +11,7 @@ DEFAULT_RISKY_PATTERNS = [
     ".github/**", "**/package.json", "**/package-lock.json", "**/*.env*",
 ]
 
-TEMPLATE_NOTE = "# orch configuration — see docs/superpowers/specs/2026-10-16-agent-dev-orchestrator-design.md\n"
+TEMPLATE_NOTE = "# orch configuration — see README.md\n"
 
 
 class Config(BaseModel):

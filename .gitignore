@@ -6,3 +6,9 @@ __pycache__/
 .pytest_cache/
 state/
 runs/
+
+# Internal docs & pilot configs — kept local, never published
+docs/adr/
+docs/pilot-shopdash-phase-1b.md
+docs/superpowers/
+pilots/
