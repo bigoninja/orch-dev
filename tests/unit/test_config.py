@@ -49,3 +49,21 @@ def test_init_refuses_non_git_dir(tmp_path: Path):
     plain.mkdir()
     with pytest.raises(ConfigError):
         init_config(plain, tmp_path / "orch.config.yaml")
+
+
+def test_pilot_config_loads():
+    root = Path(__file__).resolve().parents[2]
+    cfg = load_config(root / "pilots" / "shopdash-phase-1b.yaml")
+    assert cfg.target_repo == Path("/home/yuvi/shopdash/shopdash")
+    assert cfg.base_ref == "security/hardening-phase-1"
+    assert cfg.integration_branch == "security/hardening-phase-1b"
+    assert cfg.env_passthrough == [
+        "MIGRATION_DATABASE_URL",
+        "DATABASE_URL",
+        "PRODUCTION_DATABASE_HOST",
+    ]
+    # everything else inherits the config defaults
+    assert cfg.model == "opencode-go/deepseek-v4.1-flash"
+    assert cfg.concurrency == 3
+    assert cfg.retries == 2
+    assert cfg.timeout_minutes == 45
