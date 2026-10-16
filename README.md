@@ -66,27 +66,29 @@ Requirements:
 - **git**
 
 ```bash
-# 1. Install
+# 1. Install — `uv tool install -e .` puts `orch` on PATH as an editable install,
+#    so source edits take effect with no reinstall and no `uv run` prefix.
 git clone https://github.com/bigoninja/orch-dev.git
 cd orch-dev
 uv sync
+uv tool install -e .
 
 # 2. Point orch at a target repo (writes orch.config.yaml — edit model/base_ref there)
-uv run orch init /path/to/target-repo
+orch init /path/to/target-repo
 
 # 3. Plan — planner session → runs/<run-id>/plan.yaml (nothing executes yet)
-uv run orch plan "Add rate limiting to the public API" --from docs/design.md
+orch plan "Add rate limiting to the public API" --from docs/design.md
 
 # 4. Execute — validates the plan, then stops at the human approval gate
-uv run orch run --run <run-id>
+orch run --run <run-id>
 
 # 5. Review the plan and the run board, then approve
-uv run orch status --run <run-id>
-uv run orch approve --run <run-id>          # add --edit to adjust the plan, --accept-risky to pre-authorize
+orch status --run <run-id>
+orch approve --run <run-id>          # add --edit to adjust the plan, --accept-risky to pre-authorize
 
 # 6. Watch live, or continue after an escalation/crash
-uv run orch dashboard --run <run-id>        # local auto-refreshing board on 127.0.0.1
-uv run orch resume --run <run-id>
+orch dashboard --run <run-id>        # local auto-refreshing board on 127.0.0.1
+orch resume --run <run-id>
 ```
 
 ## CLI
@@ -99,7 +101,8 @@ uv run orch resume --run <run-id>
 | `orch approve [--edit] [--accept-risky]` | Resume past the gate; plan is re-validated and hash-pinned |
 | `orch resume [--task <id>]` | Continue after an escalation or crash; retry a specific task |
 | `orch status [--json]` | Print the run board (`status.md`) or raw `state.json` |
-| `orch dashboard [--port 8765]` | Serve a read-only, auto-refreshing progress page (task table + kanban) |
+| `orch dashboard [--port 8765]` | Serve a read-only, auto-refreshing progress page: task table, kanban board (Queued → Implementing → Repairing → Fixing → In review → Needs you → Ready to merge), and a per-task chat pane you open by clicking a card |
+| `orch models list\|set\|unset` | Show or change the model each role runs, editing the config in place **without losing its comments** |
 | `orch version` | Print the version |
 
 Every command takes `--config <path>` (default `orch.config.yaml`) and `--run <id>` (defaults to the latest eligible run).
