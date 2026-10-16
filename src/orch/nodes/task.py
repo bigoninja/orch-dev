@@ -11,8 +11,8 @@ shared state and could not tell which parallel branch it belongs to.
 Any *fixable* failure — BLOCKED, a ``files_allowed`` violation, red checks, a review
 reject — routes through :func:`fix_or_escalate` (the one budget rule): back to the
 implementer's own session via ``t_fix`` while attempts remain, otherwise to
-``t_escalate`` for a human. Model errors and timeouts are not fixable and escalate
-at once.
+``t_escalate`` for a human. Model errors, timeouts and a destructive command in the
+worker's transcript are not fixable and escalate at once, without spending a fix.
 
 The orchestrator, not the worker, owns the commit: ``commit_all`` runs only after
 the authoritative checks are green and the ``files_allowed`` boundary is clean.
@@ -36,6 +36,7 @@ from orch.gitops import (
     diff_three_dot,
     ensure_worktree,
 )
+from orch.guard import is_pre_authorized, scan_destructive
 from orch.nodes import escalation_record, merge_updates, passthrough_env
 from orch.plan import TaskDef
 from orch.prompts import build_fix_prompt, build_review_prompt, build_task_prompt
@@ -67,15 +68,6 @@ def allowed_violation(worktree: Path, files_allowed: list[str]) -> list[str]:
     lives in the scheduler). Sorted so a violation is reproducible.
     """
     return sorted(set(changed_files(worktree)) - set(files_allowed))
-
-
-def pre_authorized(task_id: str) -> bool:
-    """Whether the human pre-authorized this task's risky change.
-
-    A stub until Task 17 wires the approval gate's ``pre_authorized`` list through;
-    until then a reviewer's ``risky`` flag always stops the run for a human.
-    """
-    return False
 
 
 def attempt_failures(task_state: dict, tid: str) -> list[str]:
@@ -208,7 +200,15 @@ def t_implement(
     except ModelUnavailableError as e:
         escalation = escalation_record("model_unavailable", str(e), tid)
     else:
-        if result.timed_out:
+        # Governance: the orchestrator does not sandbox the worker's shell, so a
+        # destructive command anywhere in the transcript is a hard stop — immediate
+        # and unfixable (never routed through the fix budget).
+        hits = scan_destructive(result.stdout + result.text)
+        if hits:
+            escalation = escalation_record(
+                "destructive_command", "; ".join(hits), tid
+            )
+        elif result.timed_out:
             escalation = escalation_record(
                 "adapter_timeout",
                 f"implement timed out after {cfg.timeout_minutes} minute(s)",
@@ -223,7 +223,8 @@ def t_implement(
 
     updates: dict = {"task_state": {tid: update}}
     if escalation is not None:
-        # Model errors and timeouts are not fixable by the worker: escalate at once.
+        # Model errors, timeouts and destructive commands are not fixable by the
+        # worker: escalate at once.
         updates["escalation"] = escalation
         return Command(update=updates, goto="t_escalate")
 
@@ -419,9 +420,10 @@ def t_review(
 
     update: dict = {"verdicts": verdicts}
     updates: dict = {"task_state": {tid: update}}
-    if verdict.risky and not pre_authorized(tid):
-        # A runtime risk surprise always stops the run, with no fix loop (Task 17 adds
-        # the pre-authorization hook that lets a plan-approved risk through).
+    if verdict.risky and not is_pre_authorized(state.get("approval"), tid):
+        # A runtime risk surprise stops the run unless the human pre-authorized this
+        # exact task at the gate (``approve --accept-risky``); the verdict is stored
+        # either way, and a pre-authorized risk proceeds down the normal approve path.
         updates["escalation"] = escalation_record(
             "risk_reviewer", "the reviewer flagged this change as risky", tid
         )

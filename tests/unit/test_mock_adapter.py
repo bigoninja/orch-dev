@@ -8,6 +8,7 @@ import yaml
 
 from orch.adapters.base import AgentAdapter, AgentRunResult
 from orch.adapters.mock import MockAdapter, MockScenarioError, MockScenarioExhausted
+from orch.errors import ModelUnavailableError
 
 SCEN = {"T1": {
   "implement": [
@@ -88,6 +89,40 @@ def test_an_attempt_can_delete_a_stray_file(tmp_path):
     assert (wd / "stray.txt").read_text() == "stray"
     a.run(role="fix", prompt="p", cwd=wd, session_id="ses_T1", title="r/T1/fix1", env={})
     assert not (wd / "stray.txt").exists()
+
+
+def test_an_attempt_can_raise_model_unavailable(tmp_path):
+    """``raise_model_error`` models the pinned model being unusable on one attempt."""
+    scen = {"T1": {"implement": [
+        {"raise_model_error": True},
+        {"edits": [{"file": "app.txt", "content": "OK"}]},
+    ]}}
+    wd = tmp_path / "wd"; wd.mkdir()
+    a = _adapter(tmp_path, scen)
+    with pytest.raises(ModelUnavailableError, match="model unavailable"):
+        a.run(role="implement", prompt="p", cwd=wd, session_id=None,
+              title="r/T1/implement", env={})
+    assert not (wd / "app.txt").exists(), "the failing attempt must not have edited"
+    # The failure consumed the attempt: the next call draws the clean entry.
+    r = a.run(role="implement", prompt="p", cwd=wd, session_id=None,
+              title="r/T1/implement", env={})
+    assert (wd / "app.txt").read_text() == "OK"
+    assert r.exit_code == 0
+
+
+def test_an_attempt_text_can_be_overridden(tmp_path):
+    """A scenario entry may set the reply ``text`` (e.g. a log naming a command)."""
+    scen = {"T1": {"implement": [
+        {"edits": [{"file": "app.txt", "content": "OK"}],
+         "text": "thinking... git push origin main"},
+    ]}}
+    wd = tmp_path / "wd"; wd.mkdir()
+    a = _adapter(tmp_path, scen)
+    r = a.run(role="implement", prompt="p", cwd=wd, session_id=None,
+              title="r/T1/implement", env={})
+    assert r.text == "thinking... git push origin main"
+    assert r.stdout == "thinking... git push origin main"
+    assert (wd / "app.txt").read_text() == "OK", "edits still land"
 
 
 def test_blocked_and_review_sequence(tmp_path):

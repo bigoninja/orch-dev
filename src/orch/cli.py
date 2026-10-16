@@ -352,7 +352,8 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     from orch.artifacts import run_lock
-    from orch.errors import LockHeldError
+    from orch.errors import Escalation, LockHeldError
+    from orch.guard import verify_plan_hash
 
     cfg, rc = _config_or_error(args.config)
     if cfg is None:
@@ -365,6 +366,21 @@ def cmd_resume(args: argparse.Namespace) -> int:
     try:
         with run_lock(Path(cfg.state_dir)):
             with _graph(cfg, run_dir) as graph:
+                # The plan is immutable after approval: if the file no longer hashes
+                # to the value pinned in the checkpoint, refuse before touching the
+                # graph. ``approve --edit`` is the re-approval path (it hashes the
+                # current file); restoring plan.yaml is the other remedy.
+                try:
+                    verify_plan_hash(
+                        graph.get_state(_thread(run_id)).values, run_dir
+                    )
+                except Escalation:
+                    print(
+                        "plan.yaml changed after approval; restore it or "
+                        "re-approve with: orch approve --edit"
+                    )
+                    return 1
+
                 pending = _pending_interrupt(graph, run_id)
                 value = _interrupt_value(pending) if pending is not None else {}
                 if "kind" in value:

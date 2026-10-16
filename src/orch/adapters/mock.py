@@ -17,6 +17,14 @@ should never have touched::
 
     - {edits: [{file: app.txt, content: OK}], delete: [stray.txt]}
 
+Two failure/observation hooks make the adapter a faithful stand-in for the real
+one:
+
+* ``raise_model_error: true`` — the pinned model is unusable on this attempt; the
+  adapter raises :class:`~orch.errors.ModelUnavailableError` (never substitutes).
+* ``text: "..."`` — overrides the reply text (and ``stdout``), so a scenario can
+  put an arbitrary log line — e.g. a destructive command — in front of the graph.
+
 The task id is read from the session ``title`` in ``<run-id>/<TASK-ID>/<phase>``
 form. Attempt counters advance per ``(task_id, phase)``; ``fix`` attempts share
 the implementer's ``implement`` bucket because a fix is just another attempt on the
@@ -40,7 +48,7 @@ from pathlib import Path
 import yaml
 
 from orch.adapters.base import AgentRunResult
-from orch.errors import OrchError
+from orch.errors import ModelUnavailableError, OrchError
 from orch.gitops import commit_all
 
 
@@ -170,6 +178,13 @@ class MockAdapter:
         session = session_id or f"ses_mock_{task_id}_{self._task_calls[task_id]}"
         entry = self._next_entry(task_id, bucket)
 
+        if entry.get("raise_model_error"):
+            # The pinned model is unusable on this attempt: fail loudly, never
+            # substitute (the same law the real adapter enforces).
+            raise ModelUnavailableError(
+                f"mock: pinned model unavailable for {task_id}/{bucket}"
+            )
+
         if bucket == "review":
             return self._review_result(entry, session)
         return self._implement_result(entry, task_id, title, Path(cwd), session)
@@ -227,7 +242,7 @@ class MockAdapter:
         if entry.get("commit"):
             commit_all(cwd, f"mock: {title}")
 
-        text = f"mock {task_id}: applied {len(edits)} edit(s)"
+        text = entry.get("text") or f"mock {task_id}: applied {len(edits)} edit(s)"
         return AgentRunResult(
             session_id=session,
             exit_code=0,

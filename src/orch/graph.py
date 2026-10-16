@@ -22,7 +22,6 @@ instead as the node's own ``Command(goto=Send(<next>, payload))`` — the pinned
 Send topology, with branch identity preserved.
 """
 
-import hashlib
 import sqlite3
 from functools import partial, wraps
 from typing import Annotated, TypedDict
@@ -37,8 +36,9 @@ from langgraph.types import Command, Send, interrupt
 from orch.adapters.base import AgentAdapter
 from orch.artifacts import RunDir
 from orch.config import Config
-from orch.errors import PlanValidationError
+from orch.errors import Escalation, PlanValidationError
 from orch.gitops import branch_exists, create_branch, ensure_worktree, tracked_dirty
+from orch.guard import verify_plan_hash
 from orch.nodes import escalation_record, snapshot_run
 from orch.nodes import integrate as integrate_nodes
 from orch.nodes import report as report_nodes
@@ -177,17 +177,24 @@ def approval_gate(state: GState, *, cfg: Config, run_dir: RunDir) -> dict:
     risky = [tid for tid, task in (state.get("tasks") or {}).items() if task.get("risky")]
     decision = interrupt({"plan_path": str(run_dir.plan_path), "risky": risky})
 
-    expected = hashlib.sha256(run_dir.plan_path.read_bytes()).hexdigest()
-    if not isinstance(decision, dict) or decision.get("plan_sha256") != expected:
-        updates = {
-            "escalation": escalation_record(
-                "plan_changed", "plan.yaml changed after approval (sha256 mismatch)", None
-            )
-        }
-        snapshot_run(run_dir, cfg, state, updates=updates)
-        return updates
+    # The plan is immutable after approval; the guard is the same check ``resume``
+    # re-runs before re-entering a paused run. A non-dict resume value cannot carry
+    # the pinned hash at all, so it escalates the same way.
+    if isinstance(decision, dict):
+        try:
+            verify_plan_hash({"approval": decision}, run_dir)
+        except Escalation:
+            pass
+        else:
+            updates = {"approval": decision}
+            snapshot_run(run_dir, cfg, state, updates=updates)
+            return updates
 
-    updates = {"approval": decision}
+    updates = {
+        "escalation": escalation_record(
+            "plan_changed", "plan.yaml changed after approval (sha256 mismatch)", None
+        )
+    }
     snapshot_run(run_dir, cfg, state, updates=updates)
     return updates
 
