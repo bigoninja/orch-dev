@@ -3,9 +3,12 @@
 Topology (design §5): ``START → prepare_run → approval_gate → scheduler`` and, per
 dispatched task, ``t_implement → t_checks → t_commit → t_review → integrate``, with
 a fix loop (``t_fix``) on any fixable failure, ``integrate`` re-entering
-``scheduler`` until the graph is quiescent, then ``report``. ``t_escalate`` is the
-parent-level sink every failure route converges on; it interrupts for a human and
-applies the resume decision (retry, or mark the task escalated and report).
+``scheduler`` until the graph is quiescent, then ``report``. A recoverable
+pre-flight refusal (``dirty_tree``/``integration_branch_exists``) pauses at
+``t_escalate`` and re-enters ``prepare_run`` on resume, so the run id survives.
+``t_escalate`` is the parent-level sink every failure route converges on; it
+interrupts for a human and applies the resume decision (retry, or mark the task
+escalated and report).
 
 Why ``Command`` rather than conditional edges inside the task pipeline
 -----------------------------------------------------------------------
@@ -54,6 +57,12 @@ from orch.state import (
 )
 
 INTEGRATION_WORKTREE = "orch-integration"
+
+#: Pre-flight refusals that are *recoverable*: a human can clean the target tree or
+#: delete the integration branch and then continue the SAME run id. They therefore
+#: pause the run (via ``t_escalate``) instead of ending it at ``report`` — a
+#: terminal summary would burn the id and force a plan re-seed on every retry.
+PREFLIGHT_KINDS = frozenset({"dirty_tree", "integration_branch_exists"})
 
 #: The channels a pipeline node reads; exactly the keys of :class:`GState`.
 _STATE_CHANNELS = ["run_id", "tasks", "task_state", "approval", "escalation", "summary"]
@@ -129,8 +138,10 @@ def prepare_run(state: GState, *, cfg: Config, run_dir: RunDir) -> dict:
 
     Refuses (via escalation) a dirty target tree or an integration branch that
     already exists; on success initializes ``tasks``/``task_state`` from the plan.
-    An invalid plan raises ``PlanValidationError`` for the CLI to report — it is a
-    pre-run failure, not a graph path.
+    Both refusals are *recoverable* and therefore pause the run rather than end it
+    (``PREFLIGHT_KINDS``): the human fixes the cause and resumes the same id, so
+    this node must be re-entrant. An invalid plan raises ``PlanValidationError``
+    for the CLI to report — it is a pre-run failure, not a graph path.
     """
     plan = load_plan(run_dir.plan_path)
     issues = validate_plan(plan, cfg.risky_patterns)
@@ -167,10 +178,16 @@ def prepare_run(state: GState, *, cfg: Config, run_dir: RunDir) -> dict:
         target, target / cfg.worktree_root / INTEGRATION_WORKTREE, cfg.integration_branch
     )
 
-    updates = {
-        "tasks": {t.id: t.model_dump(mode="json") for t in plan.tasks},
-        "task_state": {t.id: new_task_state(t.id) for t in plan.tasks},
-    }
+    # Re-entrant by design: a recoverable pre-flight refusal re-enters this node
+    # after the human fixes the cause, so the task set is initialized only once and
+    # is never clobbered.
+    if state.get("tasks"):
+        updates: dict = {}
+    else:
+        updates = {
+            "tasks": {t.id: t.model_dump(mode="json") for t in plan.tasks},
+            "task_state": {t.id: new_task_state(t.id) for t in plan.tasks},
+        }
     snapshot_run(run_dir, cfg, state, updates=updates)
     return updates
 
@@ -263,6 +280,15 @@ def t_escalate(state: GState, *, cfg: Config, run_dir: RunDir) -> Command:
     decision = interrupt(escalation)
 
     if isinstance(decision, dict) and decision.get("action") == "retry":
+        # A recoverable pre-flight refusal (a dirty target tree, an integration
+        # branch already present) is re-checked from the top: clear the escalation
+        # and re-enter ``prepare_run`` so the SAME run id continues once the cause
+        # is fixed. This is the difference between a pause and a burned run id.
+        if escalation.get("kind") in PREFLIGHT_KINDS:
+            updates = {"escalation": {"clear": True}}
+            snapshot_run(run_dir, cfg, state, updates=updates)
+            return Command(update=updates, goto="prepare_run")
+
         tid = escalation.get("task_id")
         if tid is None:
             # A plan-level escalation (deadlock): there is no task to retry, so any
@@ -305,7 +331,8 @@ def t_escalate(state: GState, *, cfg: Config, run_dir: RunDir) -> Command:
 
 
 def _route_after_prepare(state: GState):
-    return "report" if state.get("escalation") is not None else "approval_gate"
+    """A pre-flight refusal pauses (it is recoverable); otherwise go to the gate."""
+    return "t_escalate" if state.get("escalation") is not None else "approval_gate"
 
 
 def _route_after_approval(state: GState):
@@ -354,7 +381,7 @@ def build_graph(*, cfg: Config, adapter: AgentAdapter, run_dir: RunDir, conn=Non
 
     graph.add_edge(START, "prepare_run")
     graph.add_conditional_edges(
-        "prepare_run", _route_after_prepare, ["approval_gate", "report"]
+        "prepare_run", _route_after_prepare, ["approval_gate", "t_escalate"]
     )
     graph.add_conditional_edges(
         "approval_gate", _route_after_approval, ["scheduler", "report"]

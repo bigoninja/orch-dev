@@ -347,6 +347,59 @@ def test_dirty_tracked_file_refuses_the_run_and_names_the_path(
     assert git(demo_repo, "branch", "--list", "orch/integration").stdout == ""
 
 
+def test_dirty_tree_pauses_the_run_and_the_same_id_resumes_after_the_fix(
+    tmp_path, demo_repo, monkeypatch, capsys
+):
+    """A recoverable pre-flight refusal must not end the run.
+
+    ``dirty_tree`` is a state the human can fix, so the run pauses *without* a
+    terminal summary: once the tree is clean the SAME run id is resumed, rather
+    than the id being burned and the plan re-seeded.
+    """
+    cfg_path, run_dir = _boot(tmp_path, demo_repo, monkeypatch, SCENARIO, tasks=[TASK])
+    (demo_repo / "a.txt").write_text("uncommitted edit", encoding="utf-8")
+
+    rc = main(["run", "--yes", "--config", str(cfg_path)])
+
+    assert rc == 2, capsys.readouterr().out
+    # Paused, not finished — this is the whole point of the fix.
+    assert not _state(run_dir).get("summary"), "a pre-flight refusal must not end the run"
+    assert not (demo_repo / ".worktrees").exists()
+
+    # Fix the cause, then continue the SAME run id.
+    git(demo_repo, "checkout", "--", "a.txt")
+    rc = main(["resume", "--run", "R1", "--config", str(cfg_path)])
+    assert rc == 0, capsys.readouterr().out
+    # ``prepare_run`` re-ran: the integration branch now exists.
+    assert git(demo_repo, "branch", "--list", "orch/integration").stdout.strip()
+
+    rc = main(["approve", "--run", "R1", "--config", str(cfg_path)])
+    assert rc == 0, capsys.readouterr().out
+    assert _state(run_dir)["task_state"]["A"]["status"] == "integrated"
+
+
+def test_existing_integration_branch_pauses_the_run_and_the_same_id_resumes(
+    tmp_path, demo_repo, monkeypatch, capsys
+):
+    """``integration_branch_exists`` is likewise recoverable, not terminal."""
+    cfg_path, run_dir = _boot(tmp_path, demo_repo, monkeypatch, SCENARIO, tasks=[TASK])
+    git(demo_repo, "branch", "orch/integration", "main")
+
+    rc = main(["run", "--yes", "--config", str(cfg_path)])
+
+    assert rc == 2, capsys.readouterr().out
+    assert _state(run_dir)["escalation"]["kind"] == "integration_branch_exists"
+    assert not _state(run_dir).get("summary"), "a pre-flight refusal must not end the run"
+
+    git(demo_repo, "branch", "-D", "orch/integration")
+    rc = main(["resume", "--run", "R1", "--config", str(cfg_path)])
+    assert rc == 0, capsys.readouterr().out
+
+    rc = main(["approve", "--run", "R1", "--config", str(cfg_path)])
+    assert rc == 0, capsys.readouterr().out
+    assert _state(run_dir)["task_state"]["A"]["status"] == "integrated"
+
+
 def test_untracked_files_do_not_block_the_run(
     tmp_path, demo_repo, monkeypatch, capsys
 ):
