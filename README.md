@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/cover.png" alt="orch" />
+</p>
+
 # orch
 
 **Parallel agent development with review parity.**
