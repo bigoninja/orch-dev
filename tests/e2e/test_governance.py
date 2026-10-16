@@ -33,24 +33,25 @@ from test_cli_e2e import (
 
 # --- (a) risky review ----------------------------------------------------------
 
-#: ``files_allowed`` matches the default ``**/*.env*`` risky pattern, so the plan
-#: flags this task risky before it is dispatched. The path is deliberately
-#: root-level: ``git status --porcelain`` collapses a brand-new untracked *directory*
-#: to ``dir/``, which would read as a ``files_allowed`` violation before the review.
+#: ``files_allowed`` matches the default ``**/gateway/**`` risky pattern, so the plan
+#: flags this task risky before it is dispatched. The path is deliberately *nested in
+#: a directory the repo does not have yet*: ``src/gateway/`` is wholly new, so the
+#: ``files_allowed`` boundary check only passes if ``git status --porcelain`` lists the
+#: file rather than the collapsed directory (see ``gitops._porcelain_lines``).
 RISKY_TASK = {
     "id": "R",
-    "title": "write the local env file",
-    "description": "Write the local env file.",
+    "title": "write the gateway token helper",
+    "description": "Write the gateway token helper.",
     "depends_on": [],
-    "files_allowed": [".env"],
-    "acceptance_criteria": [".env contains OK"],
-    "checks": {"test": {"cmd": "grep -q OK .env"}},
+    "files_allowed": ["src/gateway/token.py"],
+    "acceptance_criteria": ["src/gateway/token.py contains OK"],
+    "checks": {"test": {"cmd": "grep -q OK src/gateway/token.py"}},
 }
 
 #: The reviewer approves, but flags the change risky — a runtime risk surprise.
 RISKY_SCENARIO = {
     "R": {
-        "implement": [{"edits": [{"file": ".env", "content": "OK"}]}],
+        "implement": [{"edits": [{"file": "src/gateway/token.py", "content": "OK"}]}],
         "review": [{"verdict": "approve", "risky": True}],
     }
 }

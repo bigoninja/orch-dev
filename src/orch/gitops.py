@@ -59,8 +59,14 @@ def _porcelain_lines(repo: Path) -> list[str]:
     the first line (e.g. ``" M file"``) and shift every path by one character.
     Failures still raise ``GitError`` so a broken working dir is never silently
     reported as clean.
+
+    ``--untracked-files=all`` is load-bearing: without it git collapses a wholly
+    untracked directory to a single ``dir/`` line, which would hide the files an
+    agent just wrote and read as a ``files_allowed`` violation. With it every
+    untracked file is reported by its real path (``tracked_dirty`` still filters
+    the ``??`` lines, so the dirty-tree refusal is unaffected).
     """
-    r = _run(repo, "status", "--porcelain")
+    r = _run(repo, "status", "--porcelain", "--untracked-files=all")
     if r.returncode != 0:
         raise GitError(
             f"git status failed ({r.returncode}) in {repo}: {r.stderr.strip()}"

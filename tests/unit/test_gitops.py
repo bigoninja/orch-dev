@@ -97,6 +97,36 @@ def test_tracked_dirty_distinguishes_modified_vs_untracked(tmp_path: Path):
     assert untracked(repo) == ["new.txt"]
 
 
+def test_a_new_nested_directory_reports_its_files_not_the_directory(tmp_path: Path):
+    """A brand-new directory must not hide the files an agent just wrote.
+
+    ``git status --porcelain`` collapses a wholly-untracked directory to ``dir/``
+    by default; ``changed_files`` feeds ``allowed_violation`` (the ``files_allowed``
+    boundary), so it must expand them to the real file paths or every task that
+    creates a file in a new directory reads as a stray edit.
+    """
+    repo = _repo_with_commit(tmp_path)
+    (repo / "src" / "feature").mkdir(parents=True)
+    (repo / "src" / "feature" / "x.py").write_text("print('ok')\n")
+    (repo / "src" / "feature" / "y.py").write_text("print('also')\n")
+
+    assert sorted(changed_files(repo)) == ["src/feature/x.py", "src/feature/y.py"]
+    assert sorted(untracked(repo)) == ["src/feature/x.py", "src/feature/y.py"]
+    assert tracked_dirty(repo) == []
+
+
+def test_tracked_dirty_is_unaffected_by_untracked_files_in_new_directories(tmp_path: Path):
+    """The dirty-tree refusal still sees only tracked edits; ``??`` lines are filtered."""
+    repo = _repo_with_commit(tmp_path)
+    (repo / "base.txt").write_text("line1\nline2\n")  # modified tracked
+    (repo / "src" / "feature").mkdir(parents=True)
+    (repo / "src" / "feature" / "x.py").write_text("print('ok')\n")
+
+    assert tracked_dirty(repo) == ["base.txt"]
+    assert changed_files(repo) == ["base.txt", "src/feature/x.py"]
+    assert untracked(repo) == ["src/feature/x.py"]
+
+
 # --- branches + worktrees ---
 
 
