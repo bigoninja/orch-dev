@@ -9,7 +9,7 @@ is a violation (the boundary fails closed).
 import subprocess
 from pathlib import Path
 
-from orch.nodes.task import allowed_violation
+from orch.nodes.task import allowed_violation, work_role
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -55,3 +55,15 @@ def test_an_exact_path_pattern_allows_that_exact_path(tmp_path: Path):
     (repo / "pkg" / "b.py").write_text("stray\n")
 
     assert allowed_violation(repo, ["pkg/a.py"]) == ["pkg/b.py"]
+
+
+def test_work_role_is_repair_for_a_repair_task():
+    """A repair is its own model role, distinct from ordinary implement/fix work."""
+    assert work_role({"origin": "repair"}, "implement") == "repair"
+    assert work_role({"origin": "repair"}, "fix") == "repair"
+
+
+def test_work_role_is_the_default_for_an_ordinary_task():
+    assert work_role({}, "implement") == "implement"
+    assert work_role({"origin": None}, "fix") == "fix"
+    assert work_role({"origin": "planned"}, "implement") == "implement"

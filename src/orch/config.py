@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from orch.errors import ConfigError
 from orch.gitops import is_git_repo
@@ -10,6 +10,11 @@ DEFAULT_RISKY_PATTERNS = [
     "db/migrations/**", "**/auth/**", "**/payments/**", "**/gateway/**",
     ".github/**", "**/package.json", "**/package-lock.json", "**/*.env*",
 ]
+
+#: The adapter roles a run may pin a model to. ``repair`` is a repair task's
+#: implement/fix turn (a repair re-enters the ordinary pipeline, so it has no
+#: node of its own); ``review`` covers both ordinary and repair reviews.
+ROLE_NAMES = frozenset({"planner", "implement", "review", "fix", "repair"})
 
 TEMPLATE_NOTE = "# orch configuration — see README.md\n"
 
@@ -22,6 +27,10 @@ class Config(BaseModel):
     integration_branch: str = "orch/integration"
     worktree_root: str = ".worktrees"
     model: str = "opencode/deepseek-v4.1-flash-free"
+    #: Optional per-role model overrides; an unlisted role uses ``model``. These
+    #: are configured pins, not runtime substitutions: an unavailable model for
+    #: any role still escalates rather than falling back to another.
+    role_models: dict[str, str] = Field(default_factory=dict)
     concurrency: int = Field(3, ge=1, le=8)
     retries: int = Field(2, ge=0, le=5)
     timeout_minutes: int = Field(45, ge=5)
@@ -33,6 +42,20 @@ class Config(BaseModel):
     notify: str = "none"
     state_dir: str = "state"
     runs_dir: str = "runs"
+
+    @field_validator("role_models")
+    @classmethod
+    def _validate_role_models(cls, value: dict[str, str]) -> dict[str, str]:
+        """Reject unknown roles and blank models early, at config load."""
+        unknown = sorted(set(value) - ROLE_NAMES)
+        if unknown:
+            raise ValueError(
+                f"unknown role(s) in role_models: {unknown}; "
+                f"expected a subset of {sorted(ROLE_NAMES)}"
+            )
+        if any(not model for model in value.values()):
+            raise ValueError("role_models values must be non-empty")
+        return value
 
 
 def load_config(path: Path) -> Config:

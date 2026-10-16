@@ -123,10 +123,21 @@ def provider_error_text(lines: list[dict]) -> str:
 class OpenCodeAdapter:
     """Drives ``opencode run`` as a subprocess; satisfies :class:`AgentAdapter`."""
 
-    def __init__(self, model: str, timeout_s: int, extra_env: dict[str, str]):
+    def __init__(
+        self,
+        model: str,
+        timeout_s: int,
+        extra_env: dict[str, str],
+        role_models: dict[str, str] | None = None,
+    ):
         self.model = model
+        self.role_models = dict(role_models or {})
         self.timeout_s = timeout_s
         self.extra_env = dict(extra_env)
+
+    def model_for(self, role: str) -> str:
+        """The model pinned for ``role``: its override, else the run default."""
+        return self.role_models.get(role, self.model)
 
     def run(
         self,
@@ -140,13 +151,14 @@ class OpenCodeAdapter:
     ) -> AgentRunResult:
         """Run one agent turn and return its :class:`AgentRunResult`.
 
-        ``role`` is unused for dispatch (the prompt carries the role's contract)
-        but is part of the adapter protocol. The prompt is passed as the final
+        ``role`` selects the model to pin — a per-role override when one is
+        configured, else ``self.model``. The prompt is passed as the final
         positional argument so the model sees it verbatim.
         """
+        model = self.model_for(role)
         cmd = [
             "opencode", "run", "--format", "json", "--auto",
-            "--model", self.model, "--title", title,
+            "--model", model, "--title", title,
         ]
         if session_id:
             cmd += ["--session", session_id]
@@ -201,7 +213,7 @@ class OpenCodeAdapter:
         )
         if matched is not None:
             raise ModelUnavailableError(
-                f"pinned model {self.model!r} is unavailable: {matched.strip()[:500]}"
+                f"pinned model {model!r} is unavailable: {matched.strip()[:500]}"
             )
 
         if captured_session is None and not timed_out:

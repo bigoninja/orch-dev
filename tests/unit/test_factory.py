@@ -47,3 +47,18 @@ def test_factory_does_not_select_the_mock_on_the_scenario_var_alone(tmp_path, mo
     monkeypatch.setenv("ORCH_MOCK_SCENARIO", str(scenario))
 
     assert isinstance(factory(_cfg(tmp_path)), OpenCodeAdapter)
+
+
+def test_factory_passes_role_models_through_to_the_adapter(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCH_ADAPTER", raising=False)
+    monkeypatch.delenv("ORCH_MOCK_SCENARIO", raising=False)
+    cfg = _cfg(
+        tmp_path,
+        model="vendor/pinned-model",
+        role_models={"planner": "vendor/planner-model"},
+    )
+
+    adapter = factory(cfg)
+
+    assert adapter.model == "vendor/pinned-model"
+    assert adapter.role_models == {"planner": "vendor/planner-model"}

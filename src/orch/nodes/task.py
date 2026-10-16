@@ -60,6 +60,17 @@ def task_worktree(cfg: Config, task_id: str) -> Path:
     return cfg.target_repo / cfg.worktree_root / task_id
 
 
+def work_role(record: dict, default: str) -> str:
+    """The adapter role for a task's work turn.
+
+    A repair task re-enters the ordinary pipeline rather than owning a node, so
+    it is distinguished by its recorded ``origin`` and reports the ``repair``
+    role — letting a run pin a different model for repair work than for the
+    ``implement``/``fix`` turns of an ordinary task.
+    """
+    return "repair" if record.get("origin") == "repair" else default
+
+
 def allowed_violation(worktree: Path, files_allowed: list[str]) -> list[str]:
     """Changed paths that no ``files_allowed`` pattern full-matches.
 
@@ -198,7 +209,7 @@ def t_implement(
     escalation = None
     try:
         result = adapter.run(
-            role="implement",
+            role=work_role(record, "implement"),
             prompt=prompt,
             cwd=worktree,
             session_id=None,
@@ -353,7 +364,7 @@ def t_fix(
     escalation = None
     try:
         result = adapter.run(
-            role="fix",
+            role=work_role(record, "fix"),
             prompt=build_fix_prompt(task, findings),
             cwd=worktree,
             session_id=record.get("session_id"),

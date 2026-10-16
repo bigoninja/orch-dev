@@ -21,6 +21,7 @@ def factory(cfg: Config) -> AgentAdapter:
         return MockAdapter(Path(os.environ["ORCH_MOCK_SCENARIO"]))
     return OpenCodeAdapter(
         model=cfg.model,
+        role_models=cfg.role_models,
         timeout_s=cfg.timeout_minutes * 60,
         extra_env={},
     )

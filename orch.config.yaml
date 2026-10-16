@@ -3,7 +3,13 @@ target_repo: /path/to/target-repo
 base_ref: main
 integration_branch: orch/integration
 worktree_root: .worktrees
-model: opencode/deepseek-v4.1-flash-free
+model: opencode/space-bunny-free
+role_models:
+  planner: opencode/deepseek-v4.1-flash
+  implement: opencode/space-bunny-free
+  review: opencode/deepseek-v4.1-flash
+  fix: opencode/space-bunny-free
+  repair: opencode/deepseek-v4.1-flash
 concurrency: 3
 retries: 2
 timeout_minutes: 45

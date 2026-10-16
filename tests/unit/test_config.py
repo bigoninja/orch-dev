@@ -70,3 +70,44 @@ def test_override_config_loads(tmp_path: Path):
     assert cfg.concurrency == 3
     assert cfg.retries == 2
     assert cfg.timeout_minutes == 45
+
+
+def test_role_models_default_is_empty(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    cfg_file = tmp_path / "orch.config.yaml"
+    cfg = init_config(repo, cfg_file)
+    assert cfg.role_models == {}
+
+
+def test_role_models_roundtrip(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    cfg_file = tmp_path / "orch.config.yaml"
+    cfg_file.write_text(
+        f"target_repo: {repo}\n"
+        "role_models:\n"
+        "  planner: opencode/deepseek-v4.1-flash\n"
+        "  implement: opencode/space-bunny-free\n"
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.role_models == {
+        "planner": "opencode/deepseek-v4.1-flash",
+        "implement": "opencode/space-bunny-free",
+    }
+    # Unlisted roles still inherit the run default.
+    assert cfg.model == "opencode/deepseek-v4.1-flash-free"
+
+
+def test_unknown_role_name_rejected(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    cfg_file = tmp_path / "orch.config.yaml"
+    cfg_file.write_text(f"target_repo: {repo}\nrole_models:\n  architect: vendor/x\n")
+    with pytest.raises(ConfigError, match="unknown role"):
+        load_config(cfg_file)
+
+
+def test_blank_role_model_rejected(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    cfg_file = tmp_path / "orch.config.yaml"
+    cfg_file.write_text(f"target_repo: {repo}\nrole_models:\n  planner: ''\n")
+    with pytest.raises(ConfigError, match="non-empty"):
+        load_config(cfg_file)

@@ -52,15 +52,17 @@ def _shim_bin(tmp_path: Path, mode: str) -> str:
     return str(bin_dir)
 
 
-def _run_with_shim(tmp_path, monkeypatch, mode, *, session_id=None, timeout_s=10, env=None):
+def _run_with_shim(tmp_path, monkeypatch, mode, *, session_id=None, timeout_s=10, env=None,
+                   role="implement", role_models=None):
     args_file = tmp_path / "args.jsonl"
     pwd_file = tmp_path / "pwd.txt"
     monkeypatch.setenv("PATH", _shim_bin(tmp_path, mode) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("SHIM_ARGS_FILE", str(args_file))
     monkeypatch.setenv("SHIM_PWD_FILE", str(pwd_file))
     monkeypatch.setenv("SHIM_MODE", mode)
-    adapter = OpenCodeAdapter(model="opencode/deepseek-v4.1-flash-free", timeout_s=timeout_s, extra_env={})
-    r = adapter.run(role="implement", prompt="hello", cwd=tmp_path, session_id=session_id,
+    adapter = OpenCodeAdapter(model="opencode/deepseek-v4.1-flash-free", role_models=role_models,
+                              timeout_s=timeout_s, extra_env={})
+    r = adapter.run(role=role, prompt="hello", cwd=tmp_path, session_id=session_id,
                     title="r/T1/implement", env=env or {})
     return r, [json.loads(l) for l in args_file.read_text().splitlines()], pwd_file.read_text()
 
@@ -132,3 +134,26 @@ def test_timeout_kills_process_group(tmp_path, monkeypatch):
     t0 = time.monotonic()
     r, _, _ = _run_with_shim(tmp_path, monkeypatch, "sleep", timeout_s=1)
     assert r.timed_out is True and time.monotonic() - t0 < 5
+
+
+def test_model_for_uses_a_role_override_and_falls_back_to_the_default():
+    adapter = OpenCodeAdapter(
+        model="vendor/default",
+        role_models={"planner": "vendor/planner-model"},
+        timeout_s=10,
+        extra_env={},
+    )
+    assert adapter.model_for("planner") == "vendor/planner-model"
+    assert adapter.model_for("implement") == "vendor/default"
+
+
+def test_argv_passes_the_role_specific_model(tmp_path, monkeypatch):
+    _, argv_calls, _ = _run_with_shim(
+        tmp_path,
+        monkeypatch,
+        "ok",
+        role="planner",
+        role_models={"planner": "vendor/planner-model"},
+    )
+    argv = argv_calls[0]
+    assert argv[argv.index("--model") + 1] == "vendor/planner-model"
