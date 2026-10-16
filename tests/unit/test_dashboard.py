@@ -18,7 +18,7 @@ from pathlib import Path
 from orch.artifacts import RunDir
 from orch.config import Config
 
-from orch.dashboard import _handler_for, build_dashboard_state
+from orch.dashboard import _PAGE, _handler_for, build_dashboard_state
 
 
 def _run_dir_with_state(tmp_path: Path, payload: dict) -> RunDir:
@@ -170,3 +170,47 @@ def test_snapshot_run_writes_summary_so_finished_runs_are_detectable(tmp_path: P
     )
     written = json.loads(run_dir.state_path.read_text(encoding="utf-8"))
     assert written["summary"] == "run R1: 0/0 integrated"
+
+
+# --- page structure: the readability/a11y polish (asserted on the embedded page) ---
+
+
+def test_page_marks_escalations_as_a_live_region():
+    # A new escalation must be announced, not just painted.
+    assert 'role="alert"' in _PAGE
+
+
+def test_page_gives_review_and_approved_their_own_pill_colors():
+    # Review and approved no longer collapse into the shared "working" blue.
+    assert ".pill.review" in _PAGE and ".pill.approved" in _PAGE
+    assert "#e3b341" in _PAGE  # review amber
+    assert "#d2a8ff" in _PAGE  # approved purple
+
+
+def test_page_faint_tier_passes_contrast():
+    # #484f58 on #0d1117 is ~2.6:1 (fails AA); the faint tier is lightened.
+    assert "#7d8590" in _PAGE
+    assert "#484f58" not in _PAGE
+
+
+def test_page_has_sticky_header_progress_bar_and_scrollable_table():
+    assert "position: sticky" in _PAGE
+    assert 'class="progress"' in _PAGE
+    assert 'class="tablewrap"' in _PAGE
+
+
+def test_page_pauses_when_hidden_and_reconciles_rows_by_id():
+    assert "document.hidden" in _PAGE
+    assert "visibilitychange" in _PAGE
+    assert "dataset.id" in _PAGE
+
+
+def test_page_honors_reduced_motion_and_marks_the_active_tab():
+    assert "prefers-reduced-motion" in _PAGE
+    assert "aria-current" in _PAGE
+
+
+def test_page_keeps_its_contract_markers_and_the_resume_hint():
+    assert "<title>orch dashboard</title>" in _PAGE
+    assert 'id="brief"' not in _PAGE
+    assert "orch resume" in _PAGE

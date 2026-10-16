@@ -29,31 +29,48 @@ _PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>orch dashboard</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --faint: #7d8590; }
   body { margin: 0; background: #0d1117; color: #e6edf3;
          font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  header { padding: 20px 24px 12px; border-bottom: 1px solid #21262d; }
+  header { padding: 20px 24px 12px; border-bottom: 1px solid #21262d;
+           position: sticky; top: 0; z-index: 3; background: #0d1117; }
   h1 { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; font-size: 18px; }
   .logo svg { height: 30px; width: auto; display: block; }
   .sub { color: #8b949e; font-size: 13px; }
   .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
   .pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
-          font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+          font-size: 12px; font-weight: 600; letter-spacing: .02em;
+          transition: background .15s ease, color .15s ease; }
   .pill.running    { background: #1f6feb33; color: #79c0ff; }
   .pill.complete   { background: #23863633; color: #7ee787; }
   .pill.escalated  { background: #da363333; color: #ff7b72; }
-  .pill.pending        { background: #30363d66; color: #8b949e; }
-  .pill.implementing, .pill.review, .pill.fixing, .pill.approved
-                       { background: #1f6feb33; color: #79c0ff; }
+  .pill.pending      { background: #30363d66; color: #8b949e; }
+  .pill.implementing { background: #1f6feb33; color: #79c0ff; }
+  .pill.review       { background: #d2992233; color: #e3b341; }
+  .pill.fixing       { background: #db6d2833; color: #f0883e; }
+  .pill.approved     { background: #8957e533; color: #d2a8ff; }
   .pill.integrated { background: #23863633; color: #7ee787; }
   .pill.escalated-task { background: #da363333; color: #ff7b72; }
-  #banner { display: none; margin: 14px 24px 0; padding: 10px 14px; border-radius: 8px;
-            background: #da36331a; border: 1px solid #da363366; color: #ff7b72; }
+  .progress { height: 3px; background: #21262d; }
+  .progress > i { display: block; height: 100%; width: 0; background: #238636;
+                  transition: width .3s ease; }
+  #banner { display: none; margin: 14px 24px 0; padding: 14px 16px; border-radius: 8px;
+            background: #da36331a; border: 1px solid #da363366; color: #ff7b72;
+            font-size: 14px; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #banner.on { display: flex; }
+  #banner .hint { color: #e6edf3; background: #0d1117; border: 1px solid #21262d;
+                  border-radius: 6px; padding: 2px 8px; font-size: 12px; }
+  #banner button { margin-left: auto; background: #21262d; color: #e6edf3;
+                   border: 1px solid #30363d; border-radius: 6px; padding: 4px 10px;
+                   font: inherit; font-size: 12px; cursor: pointer; }
+  #banner button:hover { background: #30363d; }
   main { padding: 16px 24px 8px; }
+  .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d;
            vertical-align: top; }
   th { color: #8b949e; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  tbody tr:hover { background: #161b22; }
   td.notes { color: #8b949e; max-width: 340px; }
   .risky { color: #d29922; font-weight: 600; }
   .board-title { padding: 14px 24px 8px; color: #8b949e; font-size: 12px;
@@ -68,18 +85,32 @@ _PAGE = """<!doctype html>
             justify-content: space-between; align-items: baseline; }
   .col h2 .n { color: #e6edf3; font-size: 12px; }
   .card { background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
-          padding: 10px 12px; margin-bottom: 10px; }
+          padding: 10px 12px; margin-bottom: 10px; transition: border-color .15s ease; }
+  .card:hover { border-color: #30363d; }
   .card .t { font-weight: 600; margin-bottom: 4px; }
   .card .repo { color: #8b949e; font-size: 12px; margin-bottom: 8px;
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .notes { color: var(--faint); font-size: 12px; margin-top: 6px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .foot { display: flex; justify-content: space-between; gap: 8px;
-                align-items: center; color: #8b949e; font-size: 12px; margin-top: 6px; }
-  .col .empty { color: #484f58; font-size: 12px; padding: 8px 4px; }
+                align-items: center; flex-wrap: wrap; row-gap: 2px;
+                color: #8b949e; font-size: 12px; margin-top: 6px; }
+  .col .empty { color: var(--faint); font-size: 12px; padding: 8px 4px; }
+  .empty-state { color: var(--faint); padding: 18px 4px; }
   .nav { display: flex; justify-content: center; gap: 8px; padding: 12px 24px 0; }
   .navlink { padding: 6px 20px; border-radius: 999px; border: 1px solid #21262d;
              color: #8b949e; text-decoration: none; font-size: 13px; font-weight: 600; }
   .navlink.active { background: #1f6feb33; color: #79c0ff; border-color: #1f6feb66; }
-  footer { padding: 0 24px 24px; color: #484f58; font-size: 12px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+  footer { padding: 0 24px 24px; color: var(--faint); font-size: 12px; }
+  footer.disconnected { color: #f0883e; }
+  @media (max-width: 760px) {
+    th:nth-child(4), td:nth-child(4),
+    th:nth-child(5), td:nth-child(5) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -91,22 +122,30 @@ _PAGE = """<!doctype html>
     <span class="sub">→ <span id="branch"></span></span>
   </div>
 </header>
+<div class="progress" aria-hidden="true"><i id="progress"></i></div>
 <nav class="nav">
-  <a href="#status" id="nav-status" class="navlink active">Status</a>
+  <a href="#status" id="nav-status" class="navlink active" aria-current="page">Status</a>
   <a href="#cards" id="nav-cards" class="navlink">Cards</a>
 </nav>
-<div id="banner"></div>
+<div id="banner" role="alert">
+  <span id="banner-msg"></span>
+  <code class="hint" id="banner-hint">orch resume</code>
+  <button id="banner-copy" type="button">copy</button>
+</div>
 <section id="view-status">
 <main>
+  <div class="tablewrap">
   <table>
     <thead><tr><th>Task</th><th>Title</th><th>State</th><th>Attempts</th><th>Review</th><th>Notes</th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
+  </div>
+  <div id="rows-empty" class="empty-state" hidden>No tasks yet.</div>
 </main>
 </section>
 <section id="view-cards" hidden>
 <div class="board-title">Board</div>
-<div id="board" class="board"></div>
+<div id="board" class="board" role="list"></div>
 </section>
 <footer><span id="updated">connecting…</span> · auto-refresh every 3s</footer>
 <script>
@@ -136,13 +175,35 @@ const COLUMNS = [
   { key: 'ready',   label: 'Ready to merge',  match: s => s === 'approved' || s === 'integrated' },
 ];
 function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
-function renderCard(t) {
-  const card = document.createElement('div'); card.className = 'card';
+function riskyMark() {
+  const m = document.createElement('span');
+  m.className = 'risky'; m.textContent = ' ⚑';
+  m.title = 'risky (migrations/auth/payments)';
+  m.setAttribute('aria-label', 'risky: migrations, auth, or payments');
+  return m;
+}
+function updateRow(tr, t) {
+  tr.replaceChildren();
+  const add = (txt, cls) => {
+    const td = document.createElement('td');
+    if (cls) td.className = cls;
+    td.textContent = txt;
+    tr.appendChild(td);
+    return td;
+  };
+  add(t.id);
+  const title = add(t.title);
+  if (t.risky) title.appendChild(riskyMark());
+  add('').appendChild(pillEl(t.status));
+  add(String(t.attempts) + (t.fix_attempts ? ' / fix:' + t.fix_attempts : ''));
+  add(t.review || '—');
+  add(t.notes || '—', 'notes');
+}
+function updateCard(card, t) {
+  card.replaceChildren();
   const title = document.createElement('div'); title.className = 't';
   title.textContent = t.title || t.id;
-  if (t.risky) { const m = document.createElement('span');
-                 m.className = 'risky'; m.textContent = ' ⚑';
-                 m.title = 'risky (migrations/auth/payments)'; title.appendChild(m); }
+  if (t.risky) title.appendChild(riskyMark());
   card.appendChild(title);
   const repo = document.createElement('div'); repo.className = 'repo';
   repo.textContent = t.branch || ('agent/' + t.id);
@@ -159,29 +220,71 @@ function renderCard(t) {
   foot.appendChild(right);
   card.appendChild(foot);
   if (t.notes) {
-    const n = document.createElement('div'); n.className = 'repo';
-    n.style.marginTop = '6px'; n.textContent = truncate(t.notes, 80);
+    const n = document.createElement('div'); n.className = 'notes';
+    n.textContent = truncate(t.notes, 80);
     card.appendChild(n);
   }
-  return card;
+}
+// Reconcile children of `parent` against `items`, keyed by id, REUSING nodes so
+// hover and text selection survive the 3s poll (a full rebuild flickers). A node
+// whose data is unchanged is not touched at all.
+function syncList(parent, items, make, update) {
+  const existing = new Map();
+  for (const child of Array.from(parent.children)) {
+    if (child.dataset.id) existing.set(child.dataset.id, child);
+  }
+  const seen = new Set();
+  for (const item of items) {
+    const id = item.id;
+    seen.add(id);
+    let node = existing.get(id);
+    if (!node) { node = make(); node.dataset.id = id; node._sig = null; }
+    const sig = JSON.stringify(item);
+    if (node._sig !== sig) { update(node, item); node._sig = sig; }
+    parent.appendChild(node);  // moves existing nodes; never recreates them
+  }
+  for (const [id, node] of existing) if (!seen.has(id)) node.remove();
 }
 function renderBoard(tasks) {
   const board = document.getElementById('board');
-  board.replaceChildren();
+  const existing = new Map();
+  for (const col of Array.from(board.children)) {
+    if (col.dataset.col) existing.set(col.dataset.col, col);
+  }
   for (const col of COLUMNS) {
     const items = tasks.filter(t => col.match(t.status));
-    const box = document.createElement('div'); box.className = 'col';
-    const h = document.createElement('h2');
-    const label = document.createElement('span'); label.textContent = col.label;
-    const n = document.createElement('span'); n.className = 'n'; n.textContent = items.length;
-    h.appendChild(label); h.appendChild(n); box.appendChild(h);
+    let box = existing.get(col.key);
+    if (!box) {
+      box = document.createElement('div'); box.className = 'col'; box.dataset.col = col.key;
+      box.setAttribute('role', 'listitem');
+      const h = document.createElement('h2');
+      const label = document.createElement('span'); label.textContent = col.label;
+      const n = document.createElement('span'); n.className = 'n';
+      h.appendChild(label); h.appendChild(n); box.appendChild(h);
+      const cards = document.createElement('div'); cards.className = 'cards';
+      cards.setAttribute('role', 'list');
+      box.appendChild(cards);
+    }
+    box.querySelector('h2 .n').textContent = items.length;
+    const cards = box.querySelector('.cards');
     if (!items.length) {
+      cards.replaceChildren();
       const e = document.createElement('div'); e.className = 'empty'; e.textContent = '—';
-      box.appendChild(e);
+      cards.appendChild(e);
     } else {
-      for (const t of items) box.appendChild(renderCard(t));
+      for (const e of Array.from(cards.children)) {
+        if (e.classList.contains('empty')) e.remove();
+      }
+      syncList(cards, items, () => {
+        const c = document.createElement('div');
+        c.className = 'card'; c.setAttribute('role', 'listitem');
+        return c;
+      }, updateCard);
     }
     board.appendChild(box);
+  }
+  for (const [key, box] of existing) {
+    if (!COLUMNS.some(c => c.key === key)) box.remove();
   }
 }
 async function tick() {
@@ -189,47 +292,48 @@ async function tick() {
   try {
     const r = await fetch('/api/state', { cache: 'no-store' });
     d = await r.json();
-  } catch (e) { return; }
-  if (d.error) { document.getElementById('banner').style.display = 'block';
-                 document.getElementById('banner').textContent = d.error; return; }
+  } catch (e) {
+    const up = document.getElementById('updated');
+    up.textContent = 'disconnected — retrying…';
+    up.parentElement.classList.add('disconnected');
+    return;
+  }
+  const up = document.getElementById('updated');
+  up.parentElement.classList.remove('disconnected');
+  const b = document.getElementById('banner');
+  const msg = document.getElementById('banner-msg');
+  const hint = document.getElementById('banner-hint');
+  const copy = document.getElementById('banner-copy');
+  if (d.error) {
+    b.classList.add('on'); msg.textContent = d.error;
+    hint.hidden = true; copy.hidden = true; return;
+  }
   document.getElementById('runid').textContent = d.run_id;
   document.getElementById('runid').title = d.brief;
+  document.title = 'orch · ' + d.run_id + ' · ' + d.run_state;
   const st = document.getElementById('state');
   st.textContent = d.run_state;
   st.className = 'pill ' + d.run_state.toLowerCase();
   document.getElementById('integ').textContent = d.integrated + ' / ' + d.total + ' integrated';
   document.getElementById('branch').textContent = d.integration_branch;
-  const b = document.getElementById('banner');
+  const pct = d.total ? Math.round(100 * d.integrated / d.total) : 0;
+  document.getElementById('progress').style.width = pct + '%';
   if (d.escalation) {
-    b.style.display = 'block';
-    b.textContent = 'ESCALATION · ' + d.escalation.kind +
+    b.classList.add('on');
+    msg.textContent = 'ESCALATION · ' + d.escalation.kind +
       ' · task ' + (d.escalation.task_id || '—') +
       ' · ' + (d.escalation.message || '');
-  } else { b.style.display = 'none'; }
-  const tbody = document.getElementById('rows');
-  tbody.replaceChildren();
-  for (const t of d.tasks) {
-    const tr = document.createElement('tr');
-    const add = (txt, cls) => {
-      const td = document.createElement('td');
-      if (cls) td.className = cls;
-      td.textContent = txt;
-      tr.appendChild(td);
-      return td;
-    };
-    add(t.id);
-    const title = add(t.title);
-    if (t.risky) { const m = document.createElement('span');
-                   m.className = 'risky'; m.textContent = ' ⚑';
-                   m.title = 'risky (migrations/auth/payments)'; title.appendChild(m); }
-    add('').appendChild(pillEl(t.status));
-    add(String(t.attempts) + (t.fix_attempts ? ' / fix:' + t.fix_attempts : ''));
-    add(t.review || '—');
-    add(t.notes || '—', 'notes');
-    tbody.appendChild(tr);
+    const cmd = 'orch resume --run ' + d.run_id;
+    hint.hidden = false; hint.textContent = cmd; copy.hidden = false;
+    copy.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(cmd); };
+  } else {
+    b.classList.remove('on');
   }
+  const tbody = document.getElementById('rows');
+  syncList(tbody, d.tasks, () => document.createElement('tr'), updateRow);
+  document.getElementById('rows-empty').hidden = d.tasks.length > 0;
   renderBoard(d.tasks);
-  document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+  up.textContent = 'updated ' + (d.updated_at || '—');
 }
 function setView(view) {
   const isCards = view === 'cards';
@@ -237,13 +341,18 @@ function setView(view) {
   document.getElementById('view-cards').hidden = !isCards;
   document.getElementById('nav-status').classList.toggle('active', !isCards);
   document.getElementById('nav-cards').classList.toggle('active', isCards);
+  document.getElementById('nav-status').setAttribute('aria-current', isCards ? 'false' : 'page');
+  document.getElementById('nav-cards').setAttribute('aria-current', isCards ? 'page' : 'false');
 }
 window.addEventListener('hashchange', () => {
   setView(location.hash === '#cards' ? 'cards' : 'status');
 });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) tick();
+});
 setView(location.hash === '#cards' ? 'cards' : 'status');
 tick();
-setInterval(tick, 3000);
+setInterval(() => { if (!document.hidden) tick(); }, 3000);
 </script>
 </body>
 </html>
