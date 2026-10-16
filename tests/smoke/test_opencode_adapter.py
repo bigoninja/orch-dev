@@ -34,7 +34,7 @@ from orch import gitops
 from orch.adapters.opencode import OpenCodeAdapter
 
 #: The pinned model from ``orch.config.Config``; never substituted (no-substitution law).
-MODEL = "opencode-go/deepseek-v4.1-flash"
+MODEL = "opencode/deepseek-v4.1-flash-free"
 PROMPT = "Create a file hello.txt containing exactly: hello"
 
 pytestmark = [

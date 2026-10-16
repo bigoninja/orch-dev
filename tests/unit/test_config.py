@@ -20,7 +20,7 @@ def test_load_roundtrip(tmp_path: Path):
     loaded = load_config(cfg_file)
     assert loaded == cfg
     assert loaded.target_repo == repo
-    assert loaded.model == "opencode-go/deepseek-v4.1-flash"
+    assert loaded.model == "opencode/deepseek-v4.1-flash-free"
     assert loaded.concurrency == 3 and loaded.retries == 2 and loaded.timeout_minutes == 45
     assert loaded.risky_patterns == DEFAULT_RISKY_PATTERNS
 
@@ -63,7 +63,7 @@ def test_pilot_config_loads():
         "PRODUCTION_DATABASE_HOST",
     ]
     # everything else inherits the config defaults
-    assert cfg.model == "opencode-go/deepseek-v4.1-flash"
+    assert cfg.model == "opencode/deepseek-v4.1-flash-free"
     assert cfg.concurrency == 3
     assert cfg.retries == 2
     assert cfg.timeout_minutes == 45

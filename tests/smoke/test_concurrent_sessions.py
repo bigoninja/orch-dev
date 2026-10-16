@@ -38,7 +38,7 @@ import pytest
 from orch import gitops
 from orch.adapters.opencode import OpenCodeAdapter
 
-MODEL = "opencode-go/deepseek-v4.1-flash"
+MODEL = "opencode/deepseek-v4.1-flash-free"
 
 pytestmark = [
     pytest.mark.smoke,

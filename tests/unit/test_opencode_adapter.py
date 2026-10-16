@@ -50,7 +50,7 @@ def _run_with_shim(tmp_path, monkeypatch, mode, *, session_id=None, timeout_s=10
     monkeypatch.setenv("SHIM_ARGS_FILE", str(args_file))
     monkeypatch.setenv("SHIM_PWD_FILE", str(pwd_file))
     monkeypatch.setenv("SHIM_MODE", mode)
-    adapter = OpenCodeAdapter(model="opencode-go/deepseek-v4.1-flash", timeout_s=timeout_s, extra_env={})
+    adapter = OpenCodeAdapter(model="opencode/deepseek-v4.1-flash-free", timeout_s=timeout_s, extra_env={})
     r = adapter.run(role="implement", prompt="hello", cwd=tmp_path, session_id=session_id,
                     title="r/T1/implement", env=env or {})
     return r, [json.loads(l) for l in args_file.read_text().splitlines()], pwd_file.read_text()
@@ -61,7 +61,7 @@ def test_success_run_and_argv(tmp_path, monkeypatch):
     assert r.exit_code == 0 and r.session_id == "ses_shim" and r.text == "ok"
     argv = argv_calls[0]
     assert argv[:3] == ["run", "--format", "json"] and "--auto" in argv
-    assert argv[argv.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash"
+    assert argv[argv.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free"
 
 
 def test_pwd_env_tracks_cwd_so_the_project_resolves_to_the_worktree(tmp_path, monkeypatch):

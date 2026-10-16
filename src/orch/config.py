@@ -21,7 +21,7 @@ class Config(BaseModel):
     base_ref: str = "main"
     integration_branch: str = "orch/integration"
     worktree_root: str = ".worktrees"
-    model: str = "opencode-go/deepseek-v4.1-flash"
+    model: str = "opencode/deepseek-v4.1-flash-free"
     concurrency: int = Field(3, ge=1, le=8)
     retries: int = Field(2, ge=0, le=5)
     timeout_minutes: int = Field(45, ge=5)

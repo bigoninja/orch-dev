@@ -3,7 +3,7 @@ target_repo: /path/to/target-repo
 base_ref: main
 integration_branch: orch/integration
 worktree_root: .worktrees
-model: opencode-go/deepseek-v4.1-flash
+model: opencode/deepseek-v4.1-flash-free
 concurrency: 3
 retries: 2
 timeout_minutes: 45
