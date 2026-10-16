@@ -50,6 +50,46 @@ def test_commit_flag_creates_commit(tmp_path):
                           capture_output=True, text=True).stdout.strip() == ""  # attempt 2: committed by mock
 
 
+def test_bucket_maps_fix_phases_to_the_implement_bucket():
+    """``fix<N>`` is another attempt on the same task, so it shares the implement list."""
+    assert MockAdapter._bucket("fix", "fix1") == "implement"
+    assert MockAdapter._bucket("implement", "fix2") == "implement"
+    assert MockAdapter._bucket("fix", "fix") == "implement"
+    # A review is a review whether the role, the phase, or neither names it.
+    assert MockAdapter._bucket("fix", "review") == "review"
+
+
+def test_fix_phase_consumes_the_implement_bucket_not_the_review_bucket(tmp_path):
+    """A ``fix1`` call draws the *next* implement entry and echoes the given session."""
+    wd = tmp_path / "wd"; wd.mkdir(); _init_git(wd)
+    a = _adapter(tmp_path)
+    r1 = a.run(role="implement", prompt="p", cwd=wd, session_id=None,
+               title="r/T1/implement", env={})
+    assert (wd / "app.txt").read_text() == "OK one"
+    r2 = a.run(role="fix", prompt="p", cwd=wd, session_id=r1.session_id,
+               title="r/T1/fix1", env={})
+    assert (wd / "app.txt").read_text() == "OK two"  # the second implement entry
+    assert r2.session_id == r1.session_id
+    # The review bucket was not consumed by the fix calls.
+    v = a.run(role="review", prompt="p", cwd=wd, session_id=None, title="r/T1/review", env={})
+    assert json.loads(v.text)["verdict"] == "reject"
+
+
+def test_an_attempt_can_delete_a_stray_file(tmp_path):
+    """A fix cleans up a file a previous attempt should never have touched."""
+    scen = {"T1": {"implement": [
+        {"edits": [{"file": "stray.txt", "content": "stray"}]},
+        {"edits": [], "delete": ["stray.txt"]},
+    ]}}
+    wd = tmp_path / "wd"; wd.mkdir()
+    a = _adapter(tmp_path, scen)
+    a.run(role="implement", prompt="p", cwd=wd, session_id=None,
+          title="r/T1/implement", env={})
+    assert (wd / "stray.txt").read_text() == "stray"
+    a.run(role="fix", prompt="p", cwd=wd, session_id="ses_T1", title="r/T1/fix1", env={})
+    assert not (wd / "stray.txt").exists()
+
+
 def test_blocked_and_review_sequence(tmp_path):
     wd = tmp_path / "wd"; wd.mkdir(); _init_git(wd)
     a = _adapter(tmp_path)

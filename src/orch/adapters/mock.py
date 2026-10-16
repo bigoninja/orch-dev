@@ -12,10 +12,15 @@ attempts for the ``implement`` and ``review`` phases::
         - {verdict: reject, findings: ["line 2 wrong"]}
         - {verdict: approve}
 
+An attempt may also ``delete`` paths, which models a fix that cleans up a file it
+should never have touched::
+
+    - {edits: [{file: app.txt, content: OK}], delete: [stray.txt]}
+
 The task id is read from the session ``title`` in ``<run-id>/<TASK-ID>/<phase>``
 form. Attempt counters advance per ``(task_id, phase)``; ``fix`` attempts share
-the implementer's ``implement`` bucket because a fix is just another attempt on
-the same task. Failures are loud: a missing scenario entry or an exhausted
+the implementer's ``implement`` bucket because a fix is just another attempt on the
+same task. Failures are loud: a missing scenario entry or an exhausted
 attempt list raises rather than fabricating a result.
 """
 
@@ -81,11 +86,13 @@ class MockAdapter:
     def _bucket(role: str, phase: str | None) -> str:
         """Map a role/phase pair onto its scenario attempt list.
 
-        Either signal naming a review is enough; otherwise the call draws from
-        the implementer's list (so ``implement`` and ``fix`` share a bucket).
+        Either signal naming a review is enough; a fix phase (``fix1``, ``fix2``, …)
+        is another attempt on the same task, so it shares the implementer's list.
         """
         if role == "review" or phase == "review":
             return "review"
+        if phase is not None and phase.startswith("fix"):
+            return "implement"
         return "implement"
 
     def _next_entry(self, task_id: str, bucket: str) -> dict:
@@ -175,6 +182,8 @@ class MockAdapter:
             dest = cwd / e["file"]
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(e["content"])
+        for rel in entry.get("delete", []):
+            (cwd / rel).unlink(missing_ok=True)
         if entry.get("commit"):
             commit_all(cwd, f"mock: {title}")
 

@@ -2,9 +2,10 @@
 
 Topology (design §5): ``START → prepare_run → approval_gate → scheduler`` and, per
 dispatched task, ``t_implement → t_checks → t_commit → t_review → integrate``, with
-``integrate`` re-entering ``scheduler`` until the graph is quiescent, then
-``report``. ``t_escalate`` is the parent-level sink every failure route converges
-on; Task 13 replaces its stub body with the human interrupt semantics.
+a fix loop (``t_fix``) on any fixable failure, ``integrate`` re-entering
+``scheduler`` until the graph is quiescent, then ``report``. ``t_escalate`` is the
+parent-level sink every failure route converges on; it interrupts for a human and
+applies the resume decision (retry, or mark the task escalated and report).
 
 Why ``Command`` rather than conditional edges inside the task pipeline
 -----------------------------------------------------------------------
@@ -225,19 +226,54 @@ def route_scheduler(state: GState, *, cfg: Config):
     return "report"
 
 
-def t_escalate(state: GState, *, cfg: Config, run_dir: RunDir) -> dict:
-    """Task 12 stub: mark the failing task ``ESCALATED`` and fall through to report.
+def t_escalate(state: GState, *, cfg: Config, run_dir: RunDir) -> Command:
+    """Pause the run for a human and apply the resume decision.
 
-    Task 13 replaces this body with ``interrupt(state["escalation"])`` and resume
-    semantics; the signature stays ``t_escalate(state)``.
+    The run stops on a checkpointed ``interrupt(state["escalation"])``. On resume with
+    ``{"action": "retry", "task_id": X}`` the task is reset to ``PENDING`` with a
+    fresh budget (``human_retry`` is recorded) and re-dispatched; a deadlock retry
+    (no task) clears the escalation and re-enters the scheduler; anything else marks
+    the failing task ``ESCALATED`` and ends the run at ``report``.
     """
-    escalation = state.get("escalation") or {}
+    escalation = state.get("escalation")
+    if escalation is None:
+        # Defensive: nothing to escalate is not a reason to pause.
+        return Command(goto="report")
+
+    decision = interrupt(escalation)
+
+    if isinstance(decision, dict) and decision.get("action") == "retry":
+        tid = decision.get("task_id") or escalation.get("task_id")
+        if tid:
+            updates = {
+                "escalation": {"clear": True},
+                "task_state": {
+                    tid: {
+                        "status": TStatus.PENDING,
+                        "attempts": 0,
+                        "fix_attempts": 0,
+                        "human_retry": True,
+                        "violation": None,
+                        "last_error": None,
+                    }
+                },
+            }
+            snapshot_run(run_dir, cfg, state, updates=updates)
+            return Command(update=updates, goto=Send("t_implement", {"task_id": tid}))
+        if escalation.get("kind") == "deadlock":
+            updates = {"escalation": {"clear": True}}
+            snapshot_run(run_dir, cfg, state, updates=updates)
+            return Command(update=updates, goto="scheduler")
+        updates = {"escalation": {"clear": True}}
+        snapshot_run(run_dir, cfg, state, updates=updates)
+        return Command(update=updates, goto="report")
+
     tid = escalation.get("task_id")
-    updates: dict = {}
-    if tid is not None and tid in (state.get("task_state") or {}):
-        updates["task_state"] = {tid: {"status": TStatus.ESCALATED}}
-    snapshot_run(run_dir, cfg, state, updates=updates)
-    return updates
+    if tid:
+        updates = {"task_state": {tid: {"status": TStatus.ESCALATED}}}
+        snapshot_run(run_dir, cfg, state, updates=updates)
+        return Command(update=updates, goto="report")
+    return Command(goto="report")
 
 
 def _route_after_prepare(state: GState):
@@ -278,6 +314,9 @@ def build_graph(*, cfg: Config, adapter: AgentAdapter, run_dir: RunDir):
         "t_review", pipeline_node(task_nodes.t_review, cfg=cfg, adapter=adapter, run_dir=run_dir)
     )
     graph.add_node(
+        "t_fix", pipeline_node(task_nodes.t_fix, cfg=cfg, adapter=adapter, run_dir=run_dir)
+    )
+    graph.add_node(
         "integrate",
         pipeline_node(integrate_nodes.integrate, cfg=cfg, adapter=adapter, run_dir=run_dir),
     )
@@ -297,7 +336,6 @@ def build_graph(*, cfg: Config, adapter: AgentAdapter, run_dir: RunDir):
     graph.add_conditional_edges(
         "integrate", _route_after_integrate, ["scheduler", "t_escalate"]
     )
-    graph.add_edge("t_escalate", "report")
     graph.add_edge("report", END)
 
     # The state carries `TStatus` members, which msgpack stores as a tagged ext;
