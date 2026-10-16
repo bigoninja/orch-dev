@@ -214,6 +214,62 @@ def test_disjoint_ownership_runs_concurrently(first, second):
     )
 
 
+# --- Repair-task ownership exemption ----------------------------------------
+
+
+def test_a_repair_task_is_not_deferred_by_its_own_approved_parent():
+    """A repair works on its parent's files by design: the parent must not block it.
+
+    The parent is APPROVED — in flight, reviewed but not yet Integrated — so it
+    claims its files. Without the exemption it would defer its own repair forever.
+    """
+    tasks = {
+        "B": task("B", files=("src/b.py",)),
+        "B-repair": task("B-repair", files=("src/b.py",)),
+    }
+    state = {
+        "B": {"task_id": "B", "status": TStatus.APPROVED},
+        "B-repair": {
+            "task_id": "B-repair",
+            "status": TStatus.PENDING,
+            "origin": "repair",
+            "parent": "B",
+        },
+    }
+
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision(
+        ["B-repair"], "ok"
+    )
+
+
+def test_a_repair_task_is_still_deferred_by_a_non_parent_overlap():
+    """Only the parent is exempt: any other in-flight claim still defers the repair."""
+    tasks = {
+        "B": task("B", files=("src/b.py",)),
+        "C": task("C", files=("src/**",)),
+        "B-repair": task("B-repair", files=("src/b.py",)),
+    }
+    state = {
+        "B": {"status": TStatus.APPROVED},
+        "C": {"status": TStatus.IMPLEMENTING},
+        "B-repair": {"status": TStatus.PENDING, "origin": "repair", "parent": "B"},
+    }
+
+    # C's ``src/**`` overlaps the repair's file and is not its parent → deferred.
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision([], "ok")
+
+
+def test_a_plan_task_still_defers_to_an_overlapping_in_flight_task():
+    """The exemption is repair-only: a plain task's ownership behavior is unchanged."""
+    tasks = {
+        "A": task("A", files=("src/a.py",)),
+        "B": task("B", files=("src/a.py",)),
+    }
+    state = tstate(("A", TStatus.APPROVED), ("B", TStatus.PENDING))
+
+    assert compute_dispatch(tasks=tasks, task_state=state, concurrency=3) == DispatchDecision([], "ok")
+
+
 # --- Terminal states --------------------------------------------------------
 
 

@@ -7,6 +7,12 @@ overlap never run at the same time — the later one stays Ready but is *deferre
 is a total function of the plan and the task state, so the policy is testable
 without a graph, a repo, or a token.
 
+One ownership exemption: a ready **Repair** task ignores **its own parent** in
+the overlap test. A repair exists precisely to work on the parent's files, and
+the parent is still APPROVED (in flight, claiming those files) when the repair is
+spawned — so without the exemption the parent would defer its own repair forever.
+Every other in-flight claim still defers it.
+
 The returned `state` is what the graph routes on:
 
 * ``"escalated"`` — some task escalated; nothing is dispatched, the run stops.
@@ -80,6 +86,18 @@ def _claims_any(files: list[str], claims: list[list[str]]) -> bool:
     return any(_patterns_overlap(f, c) for claim in claims for f in files for c in claim)
 
 
+def _repair_parent(task_state: dict, tid: str) -> str | None:
+    """The parent a Repair task was spawned from, else ``None``.
+
+    Only a repair has a parent worth exempting from the ownership test; a plan
+    task (or a record with no ``origin``) never does.
+    """
+    record = task_state.get(tid) or {}
+    if record.get("origin") == "repair":
+        return record.get("parent")
+    return None
+
+
 def compute_dispatch(
     *, tasks: dict[str, dict], task_state: dict[str, dict], concurrency: int
 ) -> DispatchDecision:
@@ -100,7 +118,9 @@ def compute_dispatch(
         return DispatchDecision([], "done")
 
     in_flight = [tid for tid in tasks if statuses[tid] in _IN_FLIGHT]
-    claimed = [list(tasks[tid].get("files_allowed", [])) for tid in in_flight]
+    claimed: list[tuple[str, list[str]]] = [
+        (tid, list(tasks[tid].get("files_allowed", []))) for tid in in_flight
+    ]
 
     def ready(tid: str) -> bool:
         return statuses[tid] is TStatus.PENDING and all(
@@ -115,10 +135,14 @@ def compute_dispatch(
         if not ready(tid):
             continue
         files = list(tasks[tid].get("files_allowed", []))
-        if _claims_any(files, claimed):
+        # A repair works on its parent's files by design: skip the parent's own
+        # claim so the (Approved, still in-flight) parent cannot defer its repair.
+        parent = _repair_parent(task_state, tid)
+        others = [claim for owner, claim in claimed if owner != parent]
+        if _claims_any(files, others):
             continue
         dispatch.append(tid)
-        claimed.append(files)
+        claimed.append((tid, files))
 
     if dispatch or in_flight:
         return DispatchDecision(dispatch, "ok")
