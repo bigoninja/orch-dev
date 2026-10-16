@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from orch.errors import PlanValidationError
 
-CHECK_KEYS = frozenset({"test", "lint", "typecheck", "other"})
+# Check keys are descriptive and free-form (e.g. "typecheck", "migrate-0022"); uniqueness per task is enforced by the dict itself.
 
 _FENCED_YAML_RE = re.compile(r"```yaml[^\n]*\n(.*?)```", re.DOTALL)
 
@@ -90,8 +90,8 @@ def validate_plan(plan: Plan, risky_patterns: list[str]) -> list[Issue]:
         if not task.checks:
             issues.append((task.id, "no_checks", "task has no checks"))
         for key in task.checks:
-            if key not in CHECK_KEYS:
-                issues.append((task.id, "unknown_check_key", f"unknown check key {key!r}"))
+            if not str(key).strip():
+                issues.append((task.id, "empty_check_key", "check keys must be non-empty"))
 
     return issues
 
